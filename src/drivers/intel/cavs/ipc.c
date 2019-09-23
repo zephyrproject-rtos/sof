@@ -25,6 +25,11 @@
 
 extern struct ipc *_ipc;
 
+#ifdef CONFIG_DEBUG_IPC_COUNTERS
+#undef CONFIG_DEBUG_IPC_COUNTERS
+#endif
+#define CONFIG_DEBUG_IPC_COUNTERS 1
+
 /* No private data for IPC */
 
 #if CONFIG_DEBUG_IPC_COUNTERS
@@ -32,16 +37,18 @@ static inline void increment_ipc_received_counter(void)
 {
 	static uint32_t ipc_received_counter;
 
-	mailbox_sw_reg_write(SRAM_REG_FW_IPC_RECEIVED_COUNT,
-			     ipc_received_counter++);
+//	mailbox_sw_reg_write(SRAM_REG_FW_IPC_RECEIVED_COUNT,
+//			     ipc_received_counter++);
+	*(uint32_t *)(0x9e00400c) = ++ipc_received_counter;
 }
 
 static inline void increment_ipc_processed_counter(void)
 {
 	static uint32_t ipc_processed_counter;
 
-	mailbox_sw_reg_write(SRAM_REG_FW_IPC_PROCESSED_COUNT,
-			     ipc_processed_counter++);
+//	mailbox_sw_reg_write(SRAM_REG_FW_IPC_PROCESSED_COUNT,
+//			     ipc_processed_counter++);
+	*(uint32_t *)(0x9e004010) = ++ipc_processed_counter;
 }
 #endif
 
