@@ -18,6 +18,21 @@
 #include <config.h>
 #include <stdint.h>
 
+struct lp_wait_dbg {
+	uint32_t tp;
+	uint32_t ipc_rx_rsvd;
+	uint32_t ipc_tx_rsvd;
+	uint32_t entry_cnt;
+	uint32_t task_entry_cnt;
+	uint32_t waiti_cnt;
+	uint32_t exit_cnt;
+	uint32_t first_pwr_ctl;
+	uint32_t last_intenable;
+	uint32_t last_interrupt;
+};
+
+struct lp_wait_dbg *_dbg = (struct lp_wait_dbg *)(0x9e004008);
+
 #define LPSRAM_MAGIC_VALUE 0x13579BDF
 struct lpsram_header {
 	uint32_t alt_reset_vector;
@@ -47,6 +62,8 @@ static void platform_pg_task(void)
 	size_t vector_size;
 	size_t offset_to_entry;
 	int schedule_irq;
+
+	++_dbg->task_entry_cnt;
 
 	_xtos_set_intlevel(5);
 	xthal_window_spill();
@@ -81,6 +98,8 @@ static void platform_pg_task(void)
 				   BIT(IRQ_NUM_EXT_LEVEL2) |
 				   BIT(IRQ_NUM_EXT_LEVEL5));
 
+	++_dbg->waiti_cnt;
+
 	while (1) {
 		/* flush caches and handle int or pwr off */
 		xthal_dcache_all_writeback_inv();
@@ -93,6 +112,8 @@ static void platform_pg_int_handler(void *arg)
 	uint32_t dir = (uint32_t)arg;
 
 	if (dir == LPS_POWER_FLOW_D0_D0I3) {
+		++_dbg->entry_cnt;
+
 		pm_runtime_put(PM_RUNTIME_DSP, PLATFORM_MASTER_CORE_ID);
 
 		/* init power flow task */
@@ -109,6 +130,10 @@ static void platform_pg_int_handler(void *arg)
 	} else {
 		pm_runtime_get(PM_RUNTIME_DSP, PLATFORM_MASTER_CORE_ID);
 
+		++_dbg->exit_cnt;
+		_dbg->last_intenable = lp_restore.intenable;
+		_dbg->last_interrupt = XT_RSR_INTERRUPT();
+
 		/* set TCB to the one stored in platform_power_gate() */
 		task_context_set(lp_restore.task_ctx);
 		arch_interrupt_disable_mask(0xffffffff);
@@ -122,6 +147,9 @@ static void platform_pg_int_handler(void *arg)
 void lp_wait_for_interrupt(int level)
 {
 	int schedule_irq;
+
+	if (!_dbg->first_pwr_ctl)
+		_dbg->first_pwr_ctl = shim_read16(SHIM_PWRCTL);
 
 	/* store the current state */
 
