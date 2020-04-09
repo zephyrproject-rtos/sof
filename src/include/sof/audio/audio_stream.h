@@ -40,6 +40,8 @@
  * consumption/production and update the buffer state by calling
  * audio_stream_consume()/audio_stream_produce() (just a single call following
  * series of reads/writes).
+ *
+ * Lock must be held when updating r_ptr, w_ptr, avail and free.
  */
 struct audio_stream {
 	/* runtime data */
@@ -294,6 +296,10 @@ audio_stream_avail_frames(const struct audio_stream *source,
 static inline void audio_stream_produce(struct audio_stream *buffer,
 					uint32_t bytes)
 {
+	uint32_t flags;
+
+	buffer_lock(buffer, &flags);
+
 	buffer->w_ptr = audio_stream_wrap(buffer,
 					  (char *)buffer->w_ptr + bytes);
 
@@ -312,6 +318,8 @@ static inline void audio_stream_produce(struct audio_stream *buffer,
 
 	/* calculate free bytes */
 	buffer->free = buffer->size - buffer->avail;
+
+	buffer_unlock(buffer, flags);
 }
 
 /**
@@ -322,6 +330,10 @@ static inline void audio_stream_produce(struct audio_stream *buffer,
 static inline void audio_stream_consume(struct audio_stream *buffer,
 					uint32_t bytes)
 {
+	uint32_t flags;
+
+	buffer_lock(buffer, &flags);
+
 	buffer->r_ptr = audio_stream_wrap(buffer,
 					  (char *)buffer->r_ptr + bytes);
 
@@ -336,6 +348,8 @@ static inline void audio_stream_consume(struct audio_stream *buffer,
 
 	/* calculate free bytes */
 	buffer->free = buffer->size - buffer->avail;
+
+	buffer_unlock(buffer, flags);
 }
 
 /**
@@ -344,6 +358,10 @@ static inline void audio_stream_consume(struct audio_stream *buffer,
  */
 static inline void audio_stream_reset(struct audio_stream *buffer)
 {
+	uint32_t flags;
+
+	buffer_lock(buffer, &flags);
+
 	/* reset read and write pointer to buffer bas */
 	buffer->w_ptr = buffer->addr;
 	buffer->r_ptr = buffer->addr;
@@ -353,6 +371,8 @@ static inline void audio_stream_reset(struct audio_stream *buffer)
 
 	/* there are no avail samples at reset */
 	buffer->avail = 0;
+
+	buffer_unlock(buffer, flags);
 }
 
 /**
