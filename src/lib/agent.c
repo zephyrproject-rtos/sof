@@ -52,6 +52,12 @@ DECLARE_TR_CTX(sa_tr, SOF_UUID(sa_uuid), LOG_LEVEL_INFO);
 DECLARE_SOF_UUID("agent-work", agent_work_task_uuid, 0xc63c4e75, 0x8f61, 0x4420,
 		 0x93, 0x19, 0x13, 0x95, 0x93, 0x2e, 0xfa, 0x9e);
 
+/* number of semi-continuous messages to start throttling */
+#define SA_THROTLE_LIMIT	0
+
+/* message period when throttling enabled i.e. 1 msg per period */
+#define SA_THROTTLE_PERIOD_MASK		0xfff
+
 static enum task_state validate(void *data)
 {
 	struct sa *sa = data;
@@ -70,9 +76,20 @@ static enum task_state validate(void *data)
 #endif
 
 	/* warning timeout */
-	if (delta > sa->warn_timeout)
-		tr_warn(&sa_tr, "validate(), ll drift detected, delta = %u to %u",
-				      (uint32_t)delta, (uint32_t)sa->warn_timeout);
+	if (delta > sa->warn_timeout) {
+		sa->throttle++;
+
+		/* print if above limit and with a matching periodic count */
+		if (sa->throttle <= SA_THROTLE_LIMIT ||
+			(sa->throttle & SA_THROTTLE_PERIOD_MASK) == 0)
+
+			tr_warn(&sa_tr, "validate(), ll drift detected, delta = %u to %u, throttled %d",
+				      (uint32_t)delta, (uint32_t)sa->warn_timeout,
+				      sa->throttle);
+	} else {
+		if (sa->throttle >= 1)
+			sa->throttle--;
+	}
 
 	/* update last_check to current */
 	sa->last_check = current;

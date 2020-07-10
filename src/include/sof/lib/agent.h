@@ -30,6 +30,7 @@ struct sa {
 	struct task work;
 	atomic_t panic_cnt;	/**< ref counter for panic_on_delay property */
 	bool panic_on_delay;	/**< emits panic on delay if true */
+	int throttle;		/**< throttles the trace when too verbose */
 };
 
 #if CONFIG_HAVE_AGENT
