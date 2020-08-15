@@ -85,7 +85,7 @@ static inline void timer_report_delay(int id, uint64_t delay)
 		return;
 #endif
 
-	tr_err(&ll_tr, "timer_report_delay(): timer %d delayed by %d uS %d ticks",
+	tr_err(&ll_tr, "timer_report_delay(): timer %d delayed by %d uS %llu ticks",
 	       id, ll_delay_us, delay);
 
 	/* Fix compile error when traces are disabled */
@@ -152,7 +152,7 @@ static int timer_domain_register(struct ll_schedule_domain *domain,
 	zdata[core].handler = handler;
 	zdata[core].arg = arg;
 	k_work_q_start(&timer_domain->ll_workq[core], stack,
-		       ZEPHYR_LL_WORKQ_SIZE, -CONFIG_NUM_COOP_PRIORITIES);
+			ZEPHYR_LL_WORKQ_SIZE, -CONFIG_NUM_COOP_PRIORITIES);
 	k_thread_name_set(&timer_domain->ll_workq[core].thread, qname);
 	timer_domain->ll_workq_registered[core] = 1;
 
@@ -168,7 +168,7 @@ static int timer_domain_register(struct ll_schedule_domain *domain,
 #endif
 
 	tr_info(&ll_tr, "timer_domain_register domain->type %d domain->clk %d domain->ticks_per_ms %d period %d",
-		domain->type, domain->clk, domain->ticks_per_ms, (uint32_t)period);
+			domain->type, domain->clk, domain->ticks_per_ms, (uint32_t)period);
 out:
 	platform_shared_commit(timer_domain, sizeof(*timer_domain));
 
@@ -240,8 +240,8 @@ static void timer_domain_set(struct ll_schedule_domain *domain, uint64_t start)
 		ticks_delta = ticks_tout;
 
 	k_delayed_work_submit_to_queue(&timer_domain[core].ll_workq[core],
-				       &zdata[core].work,
-				       K_CYC(ticks_delta - ZEPHYR_SCHED_COST));
+					&zdata[core].work,
+					K_CYC(ticks_delta - ZEPHYR_SCHED_COST));
 #endif
 	ticks_set = platform_timer_set(timer_domain->timer, ticks_req);
 
@@ -280,7 +280,7 @@ struct ll_schedule_domain *timer_domain_init(struct timer *timer, int clk,
 	struct ll_schedule_domain *domain;
 	struct timer_domain *timer_domain;
 
-	tr_info(&ll_tr, "timer_domain_init clk %d timeout %u", clk, timeout);
+	tr_info(&ll_tr, "timer_domain_init clk %d timeout %llu", clk, timeout);
 
 	domain = domain_init(SOF_SCHEDULE_LL_TIMER, clk, false,
 			     &timer_domain_ops);

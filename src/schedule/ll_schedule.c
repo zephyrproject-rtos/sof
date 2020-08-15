@@ -114,7 +114,7 @@ static void schedule_ll_tasks_execute(struct ll_schedule_data *sch,
 			atomic_sub(&sch->num_tasks, 1);
 			if (!atomic_read(&sch->num_tasks))
 				sch->domain->registered[cpu] = false;
-			tr_info(&ll_tr, "task complete %p %s", (uintptr_t)task,
+			tr_info(&ll_tr, "task complete %p %x", task,
 				task->uid);
 			tr_info(&ll_tr, "num_tasks %d total_num_tasks %d",
 				atomic_read(&sch->num_tasks),
@@ -337,9 +337,9 @@ static int schedule_ll_task(void *data, struct task *task, uint64_t start,
 
 	pdata = ll_sch_get_pdata(task);
 
-	tr_info(&ll_tr, "task add %p %s", (uintptr_t)task, task->uid);
+	tr_info(&ll_tr, "task add %p %x", (void *)task, task->uid);
 	tr_info(&ll_tr, "task params pri %d flags %d start %u period %u",
-		task->priority, task->flags, start, period);
+		task->priority, task->flags, (uint32_t)start, (uint32_t)period);
 
 	pdata->period = period;
 
@@ -424,7 +424,7 @@ static int schedule_ll_task_cancel(void *data, struct task *task)
 
 	irq_local_disable(flags);
 
-	tr_info(&ll_tr, "task cancel %p %s", (uintptr_t)task, task->uid);
+	tr_info(&ll_tr, "task cancel %p %d", task, task->uid);
 
 	/* check to see if we are scheduled */
 	list_for_item(tlist, &sch->tasks) {
