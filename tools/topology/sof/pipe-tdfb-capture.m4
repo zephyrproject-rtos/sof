@@ -11,6 +11,7 @@ include(`pcm.m4')
 include(`dai.m4')
 include(`pipeline.m4')
 include(`bytecontrol.m4')
+include(`enumcontrol.m4')
 include(`tdfb.m4')
 
 #
@@ -18,6 +19,7 @@ include(`tdfb.m4')
 #
 
 define(DEF_TDFB_PRIV, concat(`tdfb_priv_', PIPELINE_ID))
+define(DEF_TDFB_ENUM, concat(`tdfb_enum_', PIPELINE_ID))
 
 # Define filter. A passthrough configuration is set by default.
 ifdef(`PIPELINE_FILTER1', , `define(PIPELINE_FILTER1, `tdfb/coef_line2_pass.m4')')
@@ -36,6 +38,17 @@ C_CONTROLBYTES(DEF_TDFB_BYTES, PIPELINE_ID,
 	,
 	DEF_TDFB_PRIV)
 
+# TDFB enum list
+CONTROLENUM_LIST(tdfb_preset, LIST(`	', `"preset1"', `"preset2"'))
+
+# TDFB enum control
+C_CONTROLENUM(DEF_TDFB_ENUM, PIPELINE_ID,
+	tdfb_preset,
+	LIST(`	', ENUM_CHANNEL(FL, 3, 0), ENUM_CHANNEL(FR, 3, 1)),
+	CONTROLENUM_OPS(enum,
+		257 binds the mixer control to enum get/put handlers,
+		257, 257))
+
 #
 # Components and Buffers
 #
@@ -46,7 +59,7 @@ W_PCM_CAPTURE(PCM_ID, TDFB Capture, 0, 2)
 
 # "TDFB 0" has 2 sink period and x source periods
 W_TDFB(0, PIPELINE_FORMAT, 2, DAI_PERIODS, SCHEDULE_CORE,
-	LIST(`		', "DEF_TDFB_BYTES"))
+	LIST(`		', "DEF_TDFB_BYTES"), LIST(`		', "DEF_TDFB_ENUM"))
 
 # Capture Buffers
 W_BUFFER(0, COMP_BUFFER_SIZE(2,
@@ -85,4 +98,5 @@ PCM_CAPABILITIES(TDFB Capture PCM_ID, `S32_LE,S24_LE,S16_LE', PCM_MIN_RATE,
 	2, 16, 192, 16384, 65536, 65536)
 
 undefine(`DEF_TDFB_PRIV')
+undefine(`DEF_TDFB_ENUM')
 undefine(`DEF_TDFB_BYTES')

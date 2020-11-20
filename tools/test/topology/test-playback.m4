@@ -42,7 +42,9 @@ define(`upcase', `translit(`$*', `a-z', `A-Z')')
 # PIPELINE_FILTERx notation will be updated in future for better flexibility.
 ifelse(TEST_PIPE_NAME, `eq-iir', `define(PIPELINE_FILTER1, `eq_iir_coef_loudness.m4')')
 ifelse(TEST_PIPE_NAME, `eq-fir', `define(PIPELINE_FILTER2, `eq_fir_coef_loudness.m4')')
-ifelse(TEST_PIPE_NAME, `tdfb',  `define(PIPELINE_FILTER1, `tdfb/coef_line2_50mm_pm90deg_48khz.m4')')
+#ifelse(TEST_PIPE_NAME, `tdfb',  `define(PIPELINE_FILTER1, `tdfb/coef_line2_50mm_azm90_90_3el0_0_3deg_48khz.m4')')
+#ifelse(TEST_PIPE_NAME, `tdfb',  `define(PIPELINE_FILTER1, `tdfb/coef_line2_50mm_azm90el0deg_48khz.m4')')
+ifelse(TEST_PIPE_NAME, `tdfb',  `define(PIPELINE_FILTER1, `tdfb/coef_line2_50mm_pm25deg_48khz.m4')')
 
 # Define TEST_HAS_PIPEn flags according to TEST_PIPE_AMOUNT. Those flags will be
 # used to determine whether PIPELINE_n should be added.

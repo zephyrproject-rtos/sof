@@ -13,6 +13,7 @@ include(`dai.m4')
 include(`pipeline.m4')
 include(`bytecontrol.m4')
 include(`mixercontrol.m4')
+include(`enumcontrol.m4')
 include(`tdfb.m4')
 include(`eq_iir.m4')
 
@@ -26,6 +27,10 @@ define(`CONTROL_NAME', `CONTROL_NAME_VOLUME')
 #
 
 define(DEF_TDFB_PRIV, concat(`tdfb_priv_', PIPELINE_ID))
+define(DEF_TDFB_ONOFF_ENUM, concat(`tdfb_onoff_enum_', PIPELINE_ID))
+define(DEF_TDFB_DIRECTION_ENUM, concat(`tdfb_direction_enum_', PIPELINE_ID))
+define(DEF_TDFB_ONOFF, concat(`tdfb_onoff_', PIPELINE_ID))
+define(DEF_TDFB_BEAMN, concat(`tdfb_beamn_', PIPELINE_ID))
 
 # Define filter. A passthrough is set by default.
 ifdef(`PIPELINE_FILTER1', , `define(PIPELINE_FILTER1, `tdfb/coef_line2_pass.m4')')
@@ -43,6 +48,28 @@ C_CONTROLBYTES(DEF_TDFB_BYTES, PIPELINE_ID,
 	CONTROLBYTES_MAX(, 4096),
 	,
 	DEF_TDFB_PRIV)
+
+# TDFB enum list
+CONTROLENUM_LIST(DEF_TDFB_ONOFF, LIST(`	', `"beam on"', `"beam off"'))
+
+# TDFB enum control
+C_CONTROLENUM(DEF_TDFB_ONOFF_ENUM, PIPELINE_ID,
+	DEF_TDFB_ONOFF,
+	LIST(`	', ENUM_CHANNEL(FC, 3, 0)),
+	CONTROLENUM_OPS(enum,
+		257 binds the mixer control to enum get/put handlers,
+		257, 257))
+
+# TDFB enum list
+CONTROLENUM_LIST(DEF_TDFB_BEAMN, LIST(`	', `"0deg"', `"30deg"', `"60deg"', `"90deg"', `"120deg"', `"150deg"', `"180deg"', `"210deg"', `"240deg"', `"270deg"', `"300deg"', `"330deg"'))
+
+# TDFB enum control
+C_CONTROLENUM(DEF_TDFB_DIRECTION_ENUM, PIPELINE_ID,
+	DEF_TDFB_BEAMN,
+	LIST(`	', ENUM_CHANNEL(FC, 3, 0)),
+	CONTROLENUM_OPS(enum,
+		257 binds the mixer control to enum get/put handlers,
+		257, 257))
 
 # Volume Mixer control with max value of 32
 C_CONTROLMIXER(Capture Volume, PIPELINE_ID,
@@ -118,7 +145,9 @@ W_EQ_IIR(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
 
 # "TDFB 0" has 2 sink period and x source periods
 W_TDFB(0, PIPELINE_FORMAT, 2, DAI_PERIODS, SCHEDULE_CORE,
-	LIST(`		', "DEF_TDFB_BYTES"))
+	LIST(`		', "DEF_TDFB_BYTES"),
+	LIST(`		', "DEF_TDFB_ONOFF_ENUM"),
+	LIST(`		', "DEF_TDFB_DIRECTION_ENUM"))
 
 # Capture Buffers
 W_BUFFER(0, COMP_BUFFER_SIZE(2,
@@ -175,5 +204,9 @@ undefine(`DEF_PGA_TOKENS')
 undefine(`DEF_PGA_CONF')
 undefine(`DEF_TDFB_PRIV')
 undefine(`DEF_TDFB_BYTES')
+undefine(`DEF_TDFB_ONOFF_ENUM')
+undefine(`DEF_TDFB_DIRECTION_ENUM')
+undefine(`DEF_TDFB_ENUM')
+undefine(`DEF_TDFB_ONOFF')
 undefine(`DEF_EQIIR_COEF')
 undefine(`DEF_EQIIR_PRIV')

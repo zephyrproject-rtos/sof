@@ -40,7 +40,7 @@ t.nch = 2;                             % Number of channels
 t.ch = [1 2];                          % Test channel 1 and 2
 t.bits_in = bits_in_list;              % Input word length from func arguments
 t.bits_out = bits_out_list;            % Output word length from func arguments
-t.full_test = 1;                       % 0 is quick check only, 1 is full set
+t.full_test = 0;                       % 0 is quick check only, 1 is full set
 
 %% Show graphics or not. With visible plot windows Octave may freeze if too
 %  many windows are kept open. As workaround setting close windows to
@@ -48,9 +48,9 @@ t.full_test = 1;                       % 0 is quick check only, 1 is full set
 %  visibility set to to 0 only console text is seen. The plots are
 %  exported into plots directory in png format and can be viewed from
 %  there.
-t.plot_close_windows = 1;  % Workaround for visible windows if Octave hangs
-t.plot_visible = 'off';    % Use off for batch tests and on for interactive
-t.files_delete = 1;        % Set to 0 to inspect the audio data files
+t.plot_close_windows = 0;  % Workaround for visible windows if Octave hangs
+t.plot_visible = 'on';    % Use off for batch tests and on for interactive
+t.files_delete = 0;        % Set to 0 to inspect the audio data files
 
 %% Prepare
 addpath('std_utils');
