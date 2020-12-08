@@ -8,8 +8,9 @@
 #define __SOF_AUDIO_CROSSOVER_CROSSOVER_H__
 
 #include <stdint.h>
+#include <sof/audio/eq_iir/iir.h>
+#include <sof/audio/format.h>
 #include <sof/platform.h>
-#include <sof/math/iir_df2t.h>
 #include <user/crossover.h>
 
 struct comp_buffer;
@@ -142,6 +143,93 @@ static inline crossover_split crossover_find_split_func(int32_t num_sinks)
 	return crossover_split_fnmap[num_sinks - CROSSOVER_2WAY_NUM_SINKS];
 }
 
+static inline int32_t iir_df2t_2stage_biquads(struct iir_state_df2t *iir, int32_t x)
+{
+	int32_t in;
+	int32_t tmp;
+	int32_t tmp_out;
+	int64_t acc;
+	int32_t out = 0;
+	int d = 0; /* Index to delays */
+	int c = 0; /* Index to coefficient a2 */
+
+	/* Bypass is set with number of biquads set to zero. */
+	if (!iir->biquads)
+		return x;
+
+	/* Coefficients order in coef[] is {a2, a1, b2, b1, b0, shift, gain} */
+
+	/* First-stage biquad filter */
+
+	/* Compute output: Delay is Q4.60
+	 * Coef(Q2.30) x Input(Q1.31) = Q3.61 shift to Q4.60 for accumulating
+	 * Then saturate to Q4.28
+	 */
+	in = x;
+	acc = iir->delay[d];
+	acc += Q_MULTSR_32X32((int64_t)iir->coef[c + 4], in, 30, 31, 60); /* b0 */
+	tmp = sat_int32((int32_t)Q_SHIFT_RND(acc, 60, 28));
+
+	/* Compute first delay */
+	acc = iir->delay[d + 1];
+	acc += Q_MULTSR_32X32((int64_t)iir->coef[c + 3], in, 30, 31, 60); /* b1 */
+	acc += Q_SHIFT_LEFT(((int64_t)iir->coef[c + 1]) * tmp, 58, 60); /* a1 */
+	iir->delay[d] = acc;
+
+	/* Compute second delay */
+	acc = Q_MULTSR_32X32((int64_t)iir->coef[c + 2], in, 30, 31, 60); /* b2 */
+	acc += Q_SHIFT_LEFT(((int64_t)iir->coef[c]) * tmp, 58, 60); /* a2 */
+	iir->delay[d + 1] = acc;
+
+	/* Apply gain Q2.14 x Q4.28 -> Q6.42 */
+	acc = ((int64_t)iir->coef[c + 6]) * tmp; /* Gain */
+
+	/* Apply biquad output shift right parameter
+	 * simultaneously with Q6.42 to Q6.26 conversion and suturation.
+	 */
+	acc = Q_SHIFT_RND(acc, 42 + iir->coef[c + 5], 26);
+	tmp_out = sat_int32(acc);
+
+	/* Proceed to next biquad coefficients and delay
+	 * lines.
+	 */
+	c += SOF_EQ_IIR_NBIQUAD_DF2T;
+	d += IIR_DF2T_NUM_DELAYS;
+
+	/* Second-stage biquad filter */
+
+	/* Compute output: Delay is Q9.55
+	 * Coef(Q2.30) x Input(Q6.26) = Q8.56 shift to Q9.55 for accumulating
+	 * Then saturate to Q9.23
+	 */
+	in = tmp_out;
+	acc = iir->delay[d];
+	acc += Q_MULTSR_32X32((int64_t)iir->coef[c + 4], in, 30, 26, 55); /* b0 */
+	tmp = sat_int32((int32_t)Q_SHIFT_RND(acc, 55, 23));
+
+	/* Compute first delay */
+	acc = iir->delay[d + 1];
+	acc += Q_MULTSR_32X32((int64_t)iir->coef[c + 3], in, 30, 26, 55); /* b1 */
+	acc += Q_SHIFT_LEFT(((int64_t)iir->coef[c + 1]) * tmp, 53, 55); /* a1 */
+	iir->delay[d] = acc;
+
+	/* Compute second delay */
+	acc = Q_MULTSR_32X32((int64_t)iir->coef[c + 2], in, 30, 26, 55); /* b2 */
+	acc += Q_SHIFT_LEFT(((int64_t)iir->coef[c]) * tmp, 53, 55); /* a2 */
+	iir->delay[d + 1] = acc;
+
+	/* Apply gain Q2.14 x Q9.23 -> Q11.37 */
+	acc = ((int64_t)iir->coef[c + 6]) * tmp; /* Gain */
+
+	/* Apply biquad output shift right parameter
+	 * simultaneously with Q11.37 to Q11.31 conversion and suturation to Q1.31.
+	 */
+	acc = Q_SHIFT_RND(acc, 37 + iir->coef[c + 5], 31);
+	out = sat_int32(acc);
+
+	return out;
+}
+
 /*
  * \brief Runs input in through the LR4 filter and returns it's output.
  */
@@ -149,7 +237,7 @@ static inline int32_t crossover_generic_process_lr4(int32_t in,
 						    struct iir_state_df2t *lr4)
 {
 	/* Cascade two biquads with same coefficients in series. */
-	return iir_df2t(lr4, in);
+	return iir_df2t_2stage_biquads(lr4, in);
 }
 
 #endif //  __SOF_AUDIO_CROSSOVER_CROSSOVER_H__
