@@ -521,7 +521,7 @@ static int kpb_prepare(struct comp_dev *dev)
 	}
 
 	if (!kpb->sel_sink || !kpb->host_sink) {
-		comp_info(dev, "kpb_prepare(): could not find sinks: sel_sink %d host_sink %d",
+		comp_info(dev, "kpb_prepare(): could not find sinks: sel_sink %lu host_sink %lu",
 			  (uintptr_t)kpb->sel_sink, (uintptr_t)kpb->host_sink);
 		ret = -EIO;
 	}
