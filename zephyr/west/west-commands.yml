@@ -1,0 +1,6 @@
+west-commands:
+  - file: west/update.py
+    commands:
+      - name: sof
+        class: UpdateTool
+        help: download SOF submodules
