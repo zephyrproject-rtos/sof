@@ -52,7 +52,7 @@ set(SOF_MATH_PATH "${SOF_SRC_PATH}/math")
 set(SOF_TRACE_PATH "${SOF_SRC_PATH}/trace")
 
 # default SOF includes
-target_include_directories(SOF INTERFACE ../rimage/src/include)
+target_include_directories(SOF INTERFACE ext/rimage/src/include)
 target_include_directories(SOF INTERFACE ../zephyr/include)
 target_include_directories(SOF INTERFACE ${SOF_SRC_PATH}/include)
 target_include_directories(SOF INTERFACE ${SOF_SRC_PATH}/arch/${ARCH}/include)
