@@ -121,12 +121,11 @@ static inline int setup_initial_mclk_source(uint32_t mclk_id,
 	int ret = 0;
 
 	/* searching the smallest possible mclk source */
-	for (i = MAX_SSP_FREQ_INDEX; i >= 0; i--) {
-		if (mclk_rate > ssp_freq[i].freq)
-			break;
-
-		if (ssp_freq[i].freq % mclk_rate == 0)
+	for (i = 0; i <= MAX_SSP_FREQ_INDEX; i++) {
+		if (ssp_freq[i].freq % mclk_rate == 0) {
 			clk_index = i;
+			break;
+		}
 	}
 
 	if (clk_index < 0) {
@@ -166,6 +165,8 @@ static inline int check_current_mclk_source(uint32_t mclk_rate)
 	struct mn *mn = mn_get();
 	int ret = 0;
 
+	tr_info(&mn_tr, "MCLK %d, source = %d",	mclk_rate, mn->mclk_source_clock);
+
 	if (ssp_freq[mn->mclk_source_clock].freq % mclk_rate != 0) {
 		tr_err(&mn_tr, "MCLK %d, no valid configuration for already selected source = %d",
 		       mclk_rate, mn->mclk_source_clock);
@@ -187,21 +188,16 @@ static inline int set_mclk_divider(uint16_t mclk_id, uint32_t mdivr_val)
 {
 	uint32_t mdivr;
 
+	tr_info(&mn_tr, "mclk_id %d mdivr_val %d", mclk_id, mdivr_val);
 	switch (mdivr_val) {
 	case 1:
 		mdivr = 0x00000fff; /* bypass divider for MCLK */
 		break;
-	case 2:
-		mdivr = 0x0; /* 1/2 */
-		break;
-	case 4:
-		mdivr = 0x2; /* 1/4 */
-		break;
-	case 8:
-		mdivr = 0x6; /* 1/8 */
+	case 2 ... 8:
+		mdivr = mdivr_val - 2; /* 1/n */
 		break;
 	default:
-		tr_err(&mn_tr, "invalid ssp_freq %d", ssp_freq[1].freq);
+		tr_err(&mn_tr, "invalid mdivr_val %d", mdivr_val);
 		return -EINVAL;
 	}
 
@@ -232,6 +228,9 @@ int mn_set_mclk(uint16_t mclk_id, uint32_t mclk_rate)
 		goto out;
 
 	mn->mclk_sources_used[mclk_id] = true;
+
+	tr_info(&mn_tr, "mclk_rate %d, mclk_source_clock %d",
+		mclk_rate, mn->mclk_source_clock);
 
 	ret = set_mclk_divider(mclk_id,
 			       ssp_freq[mn->mclk_source_clock].freq /
@@ -271,6 +270,7 @@ static bool find_mn(uint32_t freq, uint32_t bclk,
 	uint32_t m, n, mn_div;
 	uint32_t scr_div = freq / bclk;
 
+	tr_info(&mn_tr, "find_mn for freq %d bclk %d", freq, bclk);
 	/* check if just SCR is enough */
 	if (freq % bclk == 0 && scr_div < (SSCR0_SCR_MASK >> 8) + 1) {
 		*out_scr_div = scr_div;
@@ -309,6 +309,7 @@ static bool find_mn(uint32_t freq, uint32_t bclk,
 	*out_m = m;
 	*out_n = n;
 
+	tr_info(&mn_tr, "find_mn m %d n %d", m, n);
 	return true;
 }
 
@@ -320,7 +321,7 @@ static bool find_mn(uint32_t freq, uint32_t bclk,
  * \param[out] scr_div SCR divisor.
  * \param[out] m M value of M/N divider.
  * \param[out] n N value of M/N divider.
- * \return index of suitable clock if could find it, -1 otherwise.
+ * \return index of suitable clock if could find it, -EINVAL otherwise.
  */
 static int find_bclk_source(uint32_t bclk,
 			    uint32_t *scr_div, uint32_t *m, uint32_t *n)
@@ -340,7 +341,23 @@ static int find_bclk_source(uint32_t bclk,
 			    scr_div, m, n))
 			return i;
 
-	return -1;
+	return -EINVAL;
+}
+
+/**
+ * \brief Finds index of SSP clock with the given clock source encoded index.
+ * \return the index in ssp_freq if could find it, -EINVAL otherwise.
+ */
+static int find_clk_ssp_index(uint32_t src_enc)
+{
+	int i;
+
+	/* searching for the encode value matched bclk source */
+	for (i = 0; i <= MAX_SSP_FREQ_INDEX; i++)
+		if (ssp_freq_sources[i] == src_enc)
+			return i;
+
+	return -EINVAL;
 }
 
 /**
@@ -403,6 +420,35 @@ static inline int setup_initial_bclk_mn_source(uint32_t bclk, uint32_t *scr_div,
 	platform_shared_commit(mn, sizeof(*mn));
 
 	return 0;
+}
+
+/**
+ * \brief Reset M/N source clock for BCLK.
+ *	  If no port is using bclk, reset to use SSP_CLOCK_XTAL_OSCILLATOR
+ *	  as the default clock source.
+ */
+static inline void reset_bclk_mn_source(void)
+{
+	struct mn *mn = mn_get();
+	uint32_t mdivc;
+	int clk_index = find_clk_ssp_index(SSP_CLOCK_XTAL_OSCILLATOR);
+
+	if (clk_index < 0) {
+		tr_err(&mn_tr, "BCLK reset failed, no SSP_CLOCK_XTAL_OSCILLATOR source!");
+		return;
+	}
+
+	mdivc = mn_reg_read(MN_MDIVCTRL, 0);
+
+	/* reset to use XTAL Oscillator */
+	mdivc &= ~MNDSS(MN_SOURCE_CLKS_MASK);
+	mdivc |= MNDSS(SSP_CLOCK_XTAL_OSCILLATOR);
+
+	mn_reg_write(MN_MDIVCTRL, 0, mdivc);
+
+	mn->bclk_source_mn_clock = clk_index;
+
+	platform_shared_commit(mn, sizeof(*mn));
 }
 
 /**
@@ -518,6 +564,9 @@ int mn_set_bclk(uint32_t dai_index, uint32_t bclk_rate,
 	if (ret >= 0) {
 		mn->bclk_sources[dai_index] = MN_BCLK_SOURCE_MN;
 
+		tr_info(&mn_tr, "bclk_rate %d, *out_scr_div %d, m %d, n %d",
+			bclk_rate, *out_scr_div, m, n);
+
 		mn_reg_write(MN_MDIV_M_VAL(dai_index), dai_index, m);
 		mn_reg_write(MN_MDIV_N_VAL(dai_index), dai_index, n);
 	}
@@ -533,10 +582,16 @@ out:
 void mn_release_bclk(uint32_t dai_index)
 {
 	struct mn *mn = mn_get();
+	bool mn_in_use;
 
 	spin_lock(&mn->lock);
 	mn->bclk_sources[dai_index] = MN_BCLK_SOURCE_NONE;
 	platform_shared_commit(mn, sizeof(*mn));
+
+	mn_in_use = is_bclk_source_in_use(MN_BCLK_SOURCE_MN);
+	/* release the M/N clock source if not used */
+	if (!mn_in_use)
+		reset_bclk_mn_source();
 	spin_unlock(&mn->lock);
 }
 

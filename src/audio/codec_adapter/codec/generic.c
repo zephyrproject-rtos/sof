@@ -217,9 +217,6 @@ int codec_prepare(struct comp_dev *dev)
 
 	comp_dbg(dev, "codec_prepare() start");
 
-	/* After reset the codec should remain prepared, hence there
-	 * is no need to re-prepare it again.
-	 */
 	if (cd->codec.state == CODEC_PREPARED)
 		return 0;
 	if (cd->codec.state < CODEC_INITIALIZED)
@@ -328,12 +325,12 @@ int codec_reset(struct comp_dev *dev)
 	/* Codec reset itself to the initial condition after prepare()
 	 * so let's change its state to reflect that.
 	 */
-	codec->state = CODEC_PREPARED;
+	codec->state = CODEC_INITIALIZED;
 
 	return 0;
 }
 
-static void codec_free_all_memory(struct comp_dev *dev)
+void codec_free_all_memory(struct comp_dev *dev)
 {
 	struct comp_data *cd = comp_get_drvdata(dev);
 	struct codec_memory *mem;
@@ -369,8 +366,8 @@ int codec_free(struct comp_dev *dev)
 	codec->r_cfg.size = 0;
 	rfree(codec->r_cfg.data);
 	rfree(codec->s_cfg.data);
-	if (cd->runtime_params)
-		rfree(cd->runtime_params);
+	if (codec->runtime_params)
+		rfree(codec->runtime_params);
 
 	codec->state = CODEC_DISABLED;
 

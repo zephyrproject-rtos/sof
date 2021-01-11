@@ -167,10 +167,11 @@ struct codec_processing_data {
 struct codec_data {
 	uint32_t id;
 	enum codec_state state;
+	void *private; /**< self object, memory tables etc here */
+	void *runtime_params;
 	struct codec_config s_cfg; /**< setup config */
 	struct codec_config r_cfg; /**< runtime config */
 	struct codec_interface *ops; /**< codec specific operations */
-	void *private; /**< self object, memory tables etc here */
 	struct codec_memory memory; /**< memory allocated by codec */
 	struct codec_processing_data cpd; /**< shared data comp <-> codec */
 };
@@ -182,7 +183,10 @@ struct comp_data {
 	struct codec_data codec; /**< codec private data */
 	struct comp_buffer *ca_sink;
 	struct comp_buffer *ca_source;
-	void *runtime_params;
+	struct comp_buffer *local_buff;
+	struct sof_ipc_stream_params stream_params;
+	uint32_t period_bytes; /** pipeline period bytes */
+	uint32_t deep_buff_bytes; /**< copy start threshold */
 };
 
 /*****************************************************************************/
@@ -194,6 +198,7 @@ int codec_init(struct comp_dev *dev);
 void *codec_allocate_memory(struct comp_dev *dev, uint32_t size,
 			    uint32_t alignment);
 int codec_free_memory(struct comp_dev *dev, void *ptr);
+void codec_free_all_memory(struct comp_dev *dev);
 int codec_prepare(struct comp_dev *dev);
 int codec_process(struct comp_dev *dev);
 int codec_apply_runtime_config(struct comp_dev *dev);
