@@ -14,6 +14,8 @@ include(`codec_adapter.m4')
 include(`bytecontrol.m4')
 
 ifdef(`PP_CORE',`', `define(`PP_CORE', 1)')
+undefine(`DAI_PERIODS')
+define(`DAI_PERIODS', 8)
 
 #
 # Controls
@@ -56,6 +58,15 @@ CONTROLBYTES_PRIV(PP_RUNTIME_PARAMS,
 `	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,'
 `	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00"'
 )
+
+# Post process Bytes control for runtime config
+C_CONTROLBYTES(Post Process Runtime Params, PIPELINE_ID,
+        CONTROLBYTES_OPS(bytes),
+        CONTROLBYTES_EXTOPS(void, 258, 258),
+        , , ,
+        CONTROLBYTES_MAX(void, 157),
+        ,
+        PP_RUNTIME_PARAMS)
 
 #
 # Components and Buffers
