@@ -154,20 +154,22 @@ static inline int get_current_freq_idx(int clock)
 	return clk_info->current_freq_idx;
 }
 
+static inline int get_lowest_freq_idx(int clock)
+{
+	struct clock_info *clk_info = clocks_get() + clock;
+
+	return clk_info->lowest_freq_idx;
+}
+
 static void platform_clock_low_power_mode(int clock, bool enable)
 {
 	int current_freq_idx = get_current_freq_idx(clock);
 	int freq_idx = *cache_to_uncache(&active_freq_idx);
 
-	if (enable && current_freq_idx != CPU_LPRO_FREQ_IDX)
-		/* LPRO requests are fast, but requests for other ROs
-		 * can take a lot of time. That's why it's better to
-		 * not release active clock just for waiti,
-		 * so they can be switched without delay on wake up.
-		 */
-		select_cpu_clock(CPU_LPRO_FREQ_IDX, false);
+	if (enable && current_freq_idx > CPU_LPRO_FREQ_IDX)
+		select_cpu_clock(CPU_LPRO_FREQ_IDX, true);
 	else if (!enable && current_freq_idx != freq_idx)
-		select_cpu_clock(freq_idx, false);
+		select_cpu_clock(freq_idx, true);
 }
 
 void platform_clock_on_waiti(void)
@@ -175,12 +177,14 @@ void platform_clock_on_waiti(void)
 	struct pm_runtime_data *prd = pm_runtime_data_get();
 	uint32_t flags;
 	int freq_idx;
+	int lowest_freq_idx;
 	bool pm_is_active;
 
 	/* hold the prd->lock for possible active_freq_idx switching */
 	spin_lock_irq(&prd->lock, flags);
 
 	freq_idx = *cache_to_uncache(&active_freq_idx);
+	lowest_freq_idx = get_lowest_freq_idx(CLK_CPU(cpu_get_id()));
 	pm_is_active = pm_runtime_is_active(PM_RUNTIME_DSP, PLATFORM_PRIMARY_CORE_ID);
 
 	if (pm_is_active) {
@@ -188,9 +192,9 @@ void platform_clock_on_waiti(void)
 		if (freq_idx != CPU_HPRO_FREQ_IDX)
 			set_cpu_current_freq_idx(CPU_HPRO_FREQ_IDX, true);
 	} else {
-		/* set LPRO clock if not already enabled */
-		if (freq_idx != CPU_LPRO_FREQ_IDX)
-			set_cpu_current_freq_idx(CPU_LPRO_FREQ_IDX, true);
+		/* set lowest clock if not already enabled */
+		if (freq_idx != lowest_freq_idx)
+			set_cpu_current_freq_idx(lowest_freq_idx, true);
 	}
 
 	spin_unlock_irq(&prd->lock, flags);
@@ -201,7 +205,7 @@ void platform_clock_on_waiti(void)
 
 void platform_clock_on_wakeup(void)
 {
-	/* check if LPRO->HPRO switching back is needed */
+	/* check if HPRO switching back is needed */
 	pm_runtime_get(CORE_HP_CLK, cpu_get_id());
 }
 
@@ -232,6 +236,13 @@ static inline int get_current_freq_idx(int clock)
 	return clk_info->current_freq_idx;
 }
 
+static inline int get_lowest_freq_idx(int clock)
+{
+	struct clock_info *clk_info = clocks_get() + clock;
+
+	return clk_info->lowest_freq_idx;
+}
+
 static void platform_clock_low_power_mode(int clock, bool enable)
 {
 }
@@ -241,12 +252,14 @@ void platform_clock_on_waiti(void)
 	struct pm_runtime_data *prd = pm_runtime_data_get();
 	uint32_t flags;
 	int freq_idx;
+	int lowest_freq_idx;
 	bool pm_is_active;
 
 	/* hold the prd->lock for possible active_freq_idx switching */
 	spin_lock_irq(&prd->lock, flags);
 
 	freq_idx = *cache_to_uncache(&active_freq_idx);
+	lowest_freq_idx = get_lowest_freq_idx(CLK_CPU(cpu_get_id()));
 	pm_is_active = pm_runtime_is_active(PM_RUNTIME_DSP, PLATFORM_PRIMARY_CORE_ID);
 
 	if (pm_is_active) {
@@ -254,9 +267,9 @@ void platform_clock_on_waiti(void)
 		if (freq_idx != CPU_HPRO_FREQ_IDX)
 			set_cpu_current_freq_idx(CPU_HPRO_FREQ_IDX, true);
 	} else {
-		/* set LPRO clock if not already enabled */
-		if (freq_idx != CPU_LPRO_FREQ_IDX)
-			set_cpu_current_freq_idx(CPU_LPRO_FREQ_IDX, true);
+		/* set lowest clock if not already enabled */
+		if (freq_idx != lowest_freq_idx)
+			set_cpu_current_freq_idx(lowest_freq_idx, true);
 	}
 
 	spin_unlock_irq(&prd->lock, flags);
@@ -292,10 +305,24 @@ static int clock_platform_set_cpu_freq(int clock, int freq_idx)
 
 void platform_clock_init(struct sof *sof)
 {
+	uint32_t platform_lowest_clock = CPU_LOWEST_FREQ_IDX;
 	int i;
 
 	sof->clocks =
 		cache_to_uncache((struct clock_info *)platform_clocks_info);
+
+#if CAVS_VERSION == CAVS_VERSION_2_5
+	/*
+	 * Check HW version clock capabilities
+	 * Try to request WOV_CRO clock, if it fails use LPRO clock
+	 */
+
+	shim_write(SHIM_CLKCTL, shim_read(SHIM_CLKCTL) | SHIM_CLKCTL_WOV_CRO_REQUEST);
+	if (shim_read(SHIM_CLKCTL) & SHIM_CLKCTL_WOV_CRO_REQUEST)
+		shim_write(SHIM_CLKCTL, shim_read(SHIM_CLKCTL) & ~SHIM_CLKCTL_WOV_CRO_REQUEST);
+	else
+		platform_lowest_clock = CPU_LPRO_FREQ_IDX;
+#endif
 
 	for (i = 0; i < CONFIG_CORE_COUNT; i++) {
 		sof->clocks[i] = (struct clock_info) {
@@ -303,6 +330,7 @@ void platform_clock_init(struct sof *sof)
 			.freqs = cpu_freq,
 			.default_freq_idx = CPU_DEFAULT_IDX,
 			.current_freq_idx = CPU_DEFAULT_IDX,
+			.lowest_freq_idx = platform_lowest_clock,
 			.notification_id = NOTIFIER_ID_CPU_FREQ,
 			.notification_mask = NOTIFIER_TARGET_CORE_MASK(i),
 			.set_freq = clock_platform_set_cpu_freq,
