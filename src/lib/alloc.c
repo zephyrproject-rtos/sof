@@ -197,22 +197,25 @@ static void *align_ptr(struct mm_heap *heap, uint32_t alignment,
 	if (alignment <= 1)
 		return ptr;
 
-	return (void *)ALIGN((uintptr_t)ptr, alignment);
+	return (void *)ALIGN_UP((uintptr_t)ptr, alignment);
 }
 
 /* allocate single block */
-static void *alloc_block(struct mm_heap *heap, int level,
-			 uint32_t caps, uint32_t alignment)
+static void *alloc_block_index(struct mm_heap *heap, int level,
+			       uint32_t alignment, int index)
 {
 	struct block_map *map = &heap->map[level];
 	struct block_hdr *hdr;
 	void *ptr;
 	int i;
 
-	hdr = &map->block[map->first_free];
+	if (index < 0)
+		index = map->first_free;
 
 	map->free_count--;
-	ptr = (void *)(map->base + map->first_free * map->block_size);
+
+	hdr = &map->block[index];
+	ptr = (void *)(map->base + index * map->block_size);
 	ptr = align_ptr(heap, alignment, ptr, hdr);
 
 	hdr->size = 1;
@@ -221,15 +224,16 @@ static void *alloc_block(struct mm_heap *heap, int level,
 	heap->info.used += map->block_size;
 	heap->info.free -= map->block_size;
 
-	/* find next free */
-	for (i = map->first_free; i < map->count; ++i) {
-		hdr = &map->block[i];
+	if (index == map->first_free)
+		/* find next free */
+		for (i = map->first_free; i < map->count; ++i) {
+			hdr = &map->block[i];
 
-		if (hdr->used == 0) {
-			map->first_free = i;
-			break;
+			if (hdr->used == 0) {
+				map->first_free = i;
+				break;
+			}
 		}
-	}
 
 	platform_shared_commit(map->block, sizeof(*map->block) * map->count);
 	platform_shared_commit(map, sizeof(*map));
@@ -238,63 +242,109 @@ static void *alloc_block(struct mm_heap *heap, int level,
 	return ptr;
 }
 
+static void *alloc_block(struct mm_heap *heap, int level,
+			 uint32_t caps, uint32_t alignment)
+{
+	return alloc_block_index(heap, level, alignment, -1);
+}
+
 /* allocates continuous blocks */
 static void *alloc_cont_blocks(struct mm_heap *heap, int level,
 			       uint32_t caps, size_t bytes, uint32_t alignment)
 {
 	struct block_map *map = &heap->map[level];
 	struct block_hdr *hdr;
-	void *ptr = NULL;
-	void *unaligned_ptr;
-	unsigned int start = map->first_free;
+	void *ptr = NULL, *unaligned_ptr;
 	unsigned int current;
-	unsigned int count = bytes / map->block_size;
-	unsigned int remaining = 0;
-
-	if (bytes % map->block_size)
-		count++;
+	unsigned int count = 0;			/* keep compiler quiet */
+	unsigned int start = 0;			/* keep compiler quiet */
+	uintptr_t blk_start = 0, aligned = 0;	/* keep compiler quiet */
+	size_t found = 0, total_bytes = bytes;
 
 	/* check if we have enough consecutive blocks for requested
 	 * allocation size.
 	 */
-	for (current = map->first_free; current < map->count &&
-	     remaining < count; current++) {
-		hdr = &map->block[current];
+	if ((map->count - map->first_free) * map->block_size < bytes)
+		return NULL;
 
-		if (hdr->used)
-			remaining = 0;/* used, not suitable, reset */
-		else if (!remaining++)
-			start = current;/* new start */
+	/*
+	 * Walk all blocks in the map, beginning with the first free one, until
+	 * a sufficiently large sequence is found, in which the first block
+	 * contains an address with the requested alignment.
+	 */
+	for (current = map->first_free, hdr = map->block + current;
+	     current < map->count && found < total_bytes;
+	     current++, hdr++) {
+		if (hdr->used) {
+			/* Restart the search */
+			found = 0;
+			count = 0;
+			total_bytes = bytes;
+			continue;
+		}
+
+		if (!found) {
+			/* A possible beginning of a sequence */
+			blk_start = map->base + current * map->block_size;
+			start = current;
+
+			/* Check if we can start a sequence here */
+			if (alignment) {
+				aligned = ALIGN_UP(blk_start, alignment);
+
+				if (blk_start & (alignment - 1) &&
+				    aligned >= blk_start + map->block_size)
+					/*
+					 * This block doesn't contain an address
+					 * with required alignment, it is useless
+					 * as the beginning of the sequence
+					 */
+					continue;
+
+				/*
+				 * Found a potentially suitable beginning of a
+				 * sequence, from here we'll check if we get
+				 * enough blocks
+				 */
+				total_bytes += aligned - blk_start;
+			} else {
+				aligned = blk_start;
+			}
+		}
+
+		count++;
+		found += map->block_size;
 	}
 
-	if (count > map->count || remaining < count) {
-		tr_err(&mem_tr, "%d blocks needed for allocation but only %d blocks are remaining",
-		       count, remaining);
+	if (found < total_bytes) {
+		tr_err(&mem_tr, "failed to allocate %u", total_bytes);
 		goto out;
 	}
 
+	ptr = (void *)aligned;
+
 	/* we found enough space, let's allocate it */
 	map->free_count -= count;
-	ptr = (void *)(map->base + start * map->block_size);
-	unaligned_ptr = ptr;
+	unaligned_ptr = (void *)blk_start;
 
 	hdr = &map->block[start];
 	hdr->size = count;
 
-	ptr = align_ptr(heap, alignment, ptr, hdr);
-
 	heap->info.used += count * map->block_size;
 	heap->info.free -= count * map->block_size;
-	/* update first_free if needed */
-	if (map->first_free == start)
-		/* find first available free block */
-		for (map->first_free += count; map->first_free < map->count;
-			map->first_free++) {
-			hdr = &map->block[map->first_free];
 
-			if (!hdr->used)
-				break;
-		}
+	/*
+	 * if .first_free has to be updated, set it to first free block or past
+	 * the end of the map
+	 */
+	if (map->first_free == start) {
+		for (current = map->first_free + count, hdr = &map->block[current];
+		     current < map->count && hdr->used;
+		     current++, hdr++)
+			;
+
+		map->first_free = current;
+	}
 
 	/* update each block */
 	for (current = start; current < start + count; current++) {
@@ -777,36 +827,75 @@ static void *alloc_heap_buffer(struct mm_heap *heap, uint32_t flags,
 			       uint32_t caps, size_t bytes, uint32_t alignment)
 {
 	struct block_map *map;
-	int i, temp_bytes = bytes;
+#if CONFIG_DEBUG_BLOCK_FREE
+	unsigned int temp_bytes = bytes;
+#endif
+	unsigned int j;
+	int i;
 	void *ptr = NULL;
 
 	/* Only allow alignment as a power of 2 */
 	if ((alignment & (alignment - 1)) != 0)
 		panic(SOF_IPC_PANIC_MEM);
 
+	/*
+	 * There are several cases when a memory allocation request can be
+	 * satisfied with one buffer:
+	 * 1. allocate 30 bytes 32-byte aligned from 32 byte buffers. Any free
+	 * buffer is acceptable, the beginning of the buffer is used.
+	 * 2. allocate 30 bytes 256-byte aligned from 0x180 byte buffers. 1
+	 * buffer is also always enough, but in some buffers a part of the
+	 * buffer has to be skipped.
+	 * 3. allocate 200 bytes 256-byte aligned from 0x180 byte buffers. 1
+	 * buffer is enough, but not every buffer is suitable.
+	 */
+
 	/* will request fit in single block */
-	for (i = 0; i < heap->blocks; i++) {
-		map = &heap->map[i];
+	for (i = 0, map = heap->map; i < heap->blocks; i++, map++) {
+		struct block_hdr *hdr;
+		uintptr_t free_start;
 
-		/* size of requested buffer is adjusted for alignment purposes
-		 * we check if first free block is already aligned if not
-		 * we need to allocate bigger size for alignment
-		 */
-		if ((map->base + (map->block_size * map->first_free))
-		    % alignment)
-			temp_bytes += alignment;
+		if (map->block_size < bytes || !map->free_count)
+			continue;
 
-		/* Check if blocks are big enough and at least one is free */
-		if (map->block_size >= temp_bytes && map->free_count) {
-			platform_shared_commit(map, sizeof(*map));
-
+		if (alignment <= 1) {
 			/* found: grab a block */
 			ptr = alloc_block(heap, i, caps, alignment);
 			break;
 		}
-		temp_bytes = bytes;
 
-		platform_shared_commit(map, sizeof(*map));
+		/*
+		 * Usually block sizes are a power of 2 and all blocks are
+		 * respectively aligned. But it's also possible to have
+		 * non-power of 2 sized blocks, e.g. to optimize for typical
+		 * ALSA allocations a map with 0x180 byte buffers can be used.
+		 * For performance reasons we could first check the power-of-2
+		 * case. This can be added as an optimization later.
+		 */
+		for (j = map->first_free, hdr = map->block + j,
+		     free_start = map->base + map->block_size * j;
+		     j < map->count;
+		     j++, hdr++, free_start += map->block_size) {
+			uintptr_t aligned;
+
+			if (hdr->used)
+				continue;
+
+			aligned = ALIGN_UP(free_start, alignment);
+
+			if (aligned + bytes > free_start + map->block_size)
+				continue;
+
+			/* Found, alloc_block_index() cannot fail */
+			ptr = alloc_block_index(heap, i, alignment, j);
+#if CONFIG_DEBUG_BLOCK_FREE
+			temp_bytes += aligned - free_start;
+#endif
+			break;
+		}
+
+		if (ptr)
+			break;
 	}
 
 	/* request spans > 1 block */

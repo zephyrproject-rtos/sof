@@ -53,7 +53,7 @@ set(SOF_TRACE_PATH "${SOF_SRC_PATH}/trace")
 
 # Save path to rimage configuration files in cmake cache for later use by
 # rimage during the "west sign" stage
-get_filename_component(RIMAGE_CONFIG "../rimage/config" ABSOLUTE)
+get_filename_component(RIMAGE_CONFIG "ext/rimage/config" ABSOLUTE)
 set(RIMAGE_CONFIG_PATH ${RIMAGE_CONFIG} CACHE PATH
     " Path to rimage board configuration files")
 
@@ -353,6 +353,12 @@ if (CONFIG_SOC_SERIES_NXP_IMX8)
 		#${SOF_DRIVERS_PATH}/imx/esai.c
 	)
 endif()
+
+zephyr_library_sources_ifdef(CONFIG_LIBRARY
+	${SOF_PLATFORM_PATH}/library/platform.c
+	${SOF_PLATFORM_PATH}/library/lib/dai.c
+	${SOF_DRIVERS_PATH}/host/ipc.c
+)
 
 zephyr_include_directories(${SOF_PLATFORM_PATH}/${PLATFORM}/include)
 
