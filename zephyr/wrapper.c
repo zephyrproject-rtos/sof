@@ -28,6 +28,13 @@
 #error Define CONFIG_DYNAMIC_INTERRUPTS
 #endif
 
+
+/* TODO bring back zephyr MAX implementation which is used by the logging in
+ * that file.
+ */
+#undef MAX
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+
 /*
  * Memory - Create Zephyr HEAP for SOF.
  *
