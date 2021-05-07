@@ -13,6 +13,16 @@
 #include <kernel.h>
 #include <sys_clock.h>
 
+/* Paper tape over use of deprecated kwork API.  This should get
+ * addressed before the release, but do this to make forward progress
+ * on being able to deprecated the APIs in general.
+ */
+#include <toolchain.h>
+#undef __deprecated
+#define __deprecated
+#undef __DEPRECATED_MACRO
+#define __DEPRECATED_MACRO
+
 struct k_work_q edf_workq;
 K_THREAD_STACK_DEFINE(edf_workq_stack, 8192);
 

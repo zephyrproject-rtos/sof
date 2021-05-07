@@ -24,6 +24,16 @@
 #include <kernel.h>
 #include <sys_clock.h>
 
+/* Paper tape over use of deprecated kwork API.  This should get
+ * addressed before the release, but do this to make forward progress
+ * on being able to deprecated the APIs in general.
+ */
+#include <toolchain.h>
+#undef __deprecated
+#define __deprecated
+#undef __DEPRECATED_MACRO
+#define __DEPRECATED_MACRO
+
 /*
  * Currently the Zephyr clock rate is part it's Kconfig known at build time.
  * SOF on Intel CAVS platforms currently only aligns with Zephyr when both
