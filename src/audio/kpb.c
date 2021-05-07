@@ -20,7 +20,7 @@
 #include <sof/audio/kpb.h>
 #include <sof/common.h>
 #include <sof/debug/panic.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
 #include <sof/drivers/timer.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/clk.h>
@@ -77,6 +77,7 @@ struct comp_data {
 	bool sync_draining_mode; /**< should we synchronize draining with
 				   * host?
 				   */
+	enum comp_copy_type force_copy_type; /**< should we force copy_type on kpb sink? */
 };
 
 /*! KPB private functions */
@@ -185,6 +186,12 @@ static struct comp_dev *kpb_new(const struct comp_driver *drv,
 	kpb->hd.c_hb = NULL;
 	kpb->kpb_no_of_clients = 0;
 	kpb->state_log = 0;
+
+#ifdef CONFIG_KPB_FORCE_COPY_TYPE_NORMAL
+	kpb->force_copy_type = COMP_COPY_NORMAL;
+#else
+	kpb->force_copy_type = COMP_COPY_INVALID; /* do not change kpb sink copy type */
+#endif
 
 	/* Kpb has been created successfully */
 	dev->state = COMP_STATE_READY;
@@ -521,8 +528,8 @@ static int kpb_prepare(struct comp_dev *dev)
 	}
 
 	if (!kpb->sel_sink || !kpb->host_sink) {
-		comp_info(dev, "kpb_prepare(): could not find sinks: sel_sink %lu host_sink %lu",
-			  (uintptr_t)kpb->sel_sink, (uintptr_t)kpb->host_sink);
+		comp_info(dev, "kpb_prepare(): could not find sinks: sel_sink %p host_sink %p",
+			  kpb->sel_sink, kpb->host_sink);
 		ret = -EIO;
 	}
 
@@ -617,6 +624,7 @@ static int kpb_copy(struct comp_dev *dev)
 	size_t sample_width = kpb->config.sampling_width;
 	uint32_t flags = 0;
 	struct draining_data *dd = &kpb->draining_task_data;
+	uint32_t avail_bytes;
 
 	comp_dbg(dev, "kpb_copy()");
 
@@ -749,7 +757,8 @@ static int kpb_copy(struct comp_dev *dev)
 		/* In draining and init draining we only buffer data in
 		 * the internal history buffer.
 		 */
-		copy_bytes = MIN(audio_stream_get_avail_bytes(&source->stream), kpb->hd.free);
+		avail_bytes = audio_stream_get_avail_bytes(&source->stream);
+		copy_bytes = MIN(avail_bytes, kpb->hd.free);
 		ret = PPL_STATUS_PATH_STOP;
 		if (copy_bytes) {
 			buffer_invalidate(source, copy_bytes);
@@ -1007,7 +1016,6 @@ static void kpb_init_draining(struct comp_dev *dev, struct kpb_client *cli)
 	struct history_buffer *first_buff = buff;
 	size_t buffered = 0;
 	size_t local_buffered;
-	enum comp_copy_type copy_type = COMP_COPY_NORMAL;
 	size_t drain_interval;
 	size_t host_period_size = kpb->host_period_size;
 	size_t ticks_per_ms = clock_ms_to_ticks(PLATFORM_DEFAULT_CLOCK, 1);
@@ -1130,9 +1138,13 @@ static void kpb_init_draining(struct comp_dev *dev, struct kpb_client *cli)
 		kpb->draining_task_data.dev = dev;
 		kpb->draining_task_data.sync_mode_on = kpb->sync_draining_mode;
 
-		/* Set host-sink copy mode to blocking */
-		comp_set_attribute(kpb->host_sink->sink, COMP_ATTR_COPY_TYPE,
-				   &copy_type);
+		/* save current sink copy type */
+		comp_get_attribute(kpb->host_sink->sink, COMP_ATTR_COPY_TYPE,
+				   &kpb->draining_task_data.copy_type);
+
+		if (kpb->force_copy_type != COMP_COPY_INVALID)
+			comp_set_attribute(kpb->host_sink->sink, COMP_ATTR_COPY_TYPE,
+					   &kpb->force_copy_type);
 
 		/* Pause selector copy. */
 		kpb->sel_sink->sink->state = COMP_STATE_PAUSED;
@@ -1164,7 +1176,6 @@ static enum task_state kpb_draining_task(void *arg)
 	uint64_t draining_time_start;
 	uint64_t draining_time_end;
 	uint64_t draining_time_ms;
-	enum comp_copy_type copy_type = COMP_COPY_NORMAL;
 	uint64_t drain_interval = draining_data->drain_interval;
 	uint64_t next_copy_time = 0;
 	uint64_t current_time;
@@ -1286,8 +1297,9 @@ static enum task_state kpb_draining_task(void *arg)
 out:
 	draining_time_end = platform_timer_get(timer);
 
-	/* Reset host-sink copy mode back to unblocking */
-	comp_set_attribute(sink->sink, COMP_ATTR_COPY_TYPE, &copy_type);
+	/* Reset host-sink copy mode back to its pre-draining value */
+	comp_set_attribute(kpb->host_sink->sink, COMP_ATTR_COPY_TYPE,
+			   &kpb->draining_task_data.copy_type);
 
 	draining_time_ms = (draining_time_end - draining_time_start)
 		/ clock_ms_to_ticks(PLATFORM_DEFAULT_CLOCK, 1);
@@ -1317,11 +1329,11 @@ static void kpb_drain_samples(void *source, struct audio_stream *sink,
 #if CONFIG_FORMAT_S16LE || CONFIG_FORMAT_S24LE || CONFIG_FORMAT_S32LE
 	void *dst;
 	void *src = source;
-#endif
 	size_t i;
 	size_t j = 0;
 	size_t channel;
 	size_t frames = KPB_BYTES_TO_FRAMES(size, sample_width);
+#endif
 
 	switch (sample_width) {
 #if CONFIG_FORMAT_S16LE
@@ -1553,7 +1565,7 @@ static inline bool validate_host_params(struct comp_dev *dev,
 	size_t bytes_per_ms = KPB_SAMPLES_PER_MS *
 			      (KPB_SAMPLE_CONTAINER_SIZE(sample_width) / 8) *
 			      kpb->config.channels;
-	size_t pipeline_period_size = (dev->pipeline->ipc_pipe.period / 1000)
+	size_t pipeline_period_size = (dev->pipeline->period / 1000)
 					* bytes_per_ms;
 
 	if (!host_period_size || !host_buffer_size) {

@@ -40,9 +40,9 @@ PIPELINE_PCM_ADD(sof/pipe-volume-playback.m4,
 	1000, 0, 0,
 	48000, 48000, 48000)
 
-# Low Latency capture pipeline 2 on PCM 0 using max 2 channels of s24le.
+# Volume switch capture pipeline 2 on PCM 0 using max 2 channels of s24le.
 # Set 1000us deadline on core 0 with priority 0
-PIPELINE_PCM_ADD(sof/pipe-volume-capture.m4,
+PIPELINE_PCM_ADD(sof/pipe-volume-switch-capture.m4,
 	2, 0, 2, s24le,
 	1000, 0, 0,
 	48000, 48000, 48000)
@@ -54,9 +54,9 @@ PIPELINE_PCM_ADD(sof/pipe-volume-playback.m4,
 	1000, 0, 0,
 	48000, 48000, 48000)
 
-# Low Latency capture pipeline 4 on PCM 1 using max 2 channels of s24le.
+# Volume switch capture pipeline 4 on PCM 1 using max 2 channels of s24le.
 # Set 1000us deadline on core 0 with priority 0
-PIPELINE_PCM_ADD(sof/pipe-volume-capture.m4,
+PIPELINE_PCM_ADD(sof/pipe-volume-switch-capture.m4,
 	4, 1, 2, s24le,
 	1000, 0, 0,
 	48000, 48000, 48000)
@@ -68,9 +68,9 @@ PIPELINE_PCM_ADD(sof/pipe-volume-playback.m4,
 	1000, 0, 0,
 	48000, 48000, 48000)
 
-# Low Latency capture pipeline 6 on PCM 2 using max 2 channels of s24le.
+# Volume switch capture pipeline 6 on PCM 2 using max 2 channels of s24le.
 # Set 1000us deadline on core 0 with priority 0
-PIPELINE_PCM_ADD(sof/pipe-volume-capture.m4,
+PIPELINE_PCM_ADD(sof/pipe-volume-switch-capture.m4,
 	6, 2, 2, s24le,
 	1000, 0, 0,
 	48000, 48000, 48000)
@@ -176,6 +176,6 @@ DAI_CONFIG(SSP, 2, 2, NoCodec-2,
 		      SSP_CONFIG_DATA(SSP, 2, 24, 0, SSP_QUIRK_LBM)))
 
 DAI_CONFIG(DMIC, 0, 3, NoCodec-3,
-	   DMIC_CONFIG(1, 500000, 4800000, 40, 60, 48000,
+	   DMIC_CONFIG(1, 2400000, 4800000, 40, 60, 48000,
 		DMIC_WORD_LENGTH(s32le), 400, DMIC, 0,
 		PDM_CONFIG(DMIC, 0, FOUR_CH_PDM0_PDM1)))

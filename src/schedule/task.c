@@ -11,7 +11,7 @@
 #include <sof/audio/component_ext.h>
 #include <sof/audio/pipeline.h>
 #include <sof/debug/panic.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/agent.h>
 #include <sof/lib/cpu.h>
@@ -27,11 +27,6 @@
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
-
-#if STATIC_PIPE
-#include <sof/audio/pipeline.h>
-#include <ipc/trace.h>
-#endif
 
 typedef enum task_state (*task_main)(void *);
 
@@ -64,7 +59,6 @@ enum task_state task_main_primary_core(void *data)
 		if (!ipc->pm_prepare_D3)
 			ipc_send_queued_msg();
 
-		platform_shared_commit(ipc, sizeof(*ipc));
 	}
 
 	return SOF_TASK_STATE_COMPLETED;
@@ -108,12 +102,6 @@ int task_main_start(struct sof *sof)
 	/* init pipeline position offsets */
 	pipeline_posn_init(sof);
 
-#if STATIC_PIPE
-	/* init static pipeline */
-	ret = init_static_pipeline(sof->ipc);
-	if (ret < 0)
-		panic(SOF_IPC_PANIC_TASK);
-#endif
 	/* let host know DSP boot is complete */
 	ret = platform_boot_complete(0);
 	if (ret < 0)

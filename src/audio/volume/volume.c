@@ -20,7 +20,7 @@
 #include <sof/audio/volume.h>
 #include <sof/common.h>
 #include <sof/debug/panic.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/cpu.h>
 #include <sof/lib/memory.h>
@@ -240,7 +240,6 @@ static void volume_ramp(struct comp_dev *dev)
 	 * milliseconds times 8 (2 ^ 3) for fraction.
 	 */
 	ramp_time = cd->vol_ramp_elapsed_frames * 8000 / cd->sample_rate;
-
 
 	/* Update each volume if it's not at target for active channels */
 	for (i = 0; i < cd->channels; i++) {
@@ -670,7 +669,7 @@ static int volume_ctrl_get_cmd(struct comp_dev *dev,
 static int volume_cmd(struct comp_dev *dev, int cmd, void *data,
 		      int max_data_size)
 {
-	struct sof_ipc_ctrl_data *cdata = data;
+	struct sof_ipc_ctrl_data *cdata = ASSUME_ALIGNED(data, 4);
 
 	comp_dbg(dev, "volume_cmd()");
 

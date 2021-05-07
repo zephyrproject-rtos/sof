@@ -14,8 +14,7 @@
 #include <sof/list.h>
 #include <sof/sof.h>
 #include <sof/spinlock.h>
-#include <sof/trace/trace.h>
-#include <ipc/stream.h>
+#include <sof/audio/pipeline-trace.h>
 #include <ipc/topology.h>
 #include <user/trace.h>
 #include <errno.h>
@@ -26,54 +25,7 @@ struct comp_buffer;
 struct comp_dev;
 struct ipc;
 struct ipc_msg;
-struct sof_ipc_buffer;
-struct sof_ipc_pcm_params;
 struct task;
-
-/*
- * This flag disables firmware-side xrun recovery.
- * It should remain enabled in the situation when the
- * recovery is delegated to the outside of firmware.
- */
-#define NO_XRUN_RECOVERY 1
-
-/* pipeline tracing */
-extern struct tr_ctx pipe_tr;
-
-#define trace_pipe_get_tr_ctx(pipe_p) (&pipe_p->tctx)
-#define trace_pipe_get_id(pipe_p) ((pipe_p)->ipc_pipe.pipeline_id)
-#define trace_pipe_get_subid(pipe_p) ((pipe_p)->ipc_pipe.comp_id)
-
-/* class (driver) level (no device object) tracing */
-
-#define pipe_cl_err(__e, ...)						\
-	tr_err(&pipe_tr, __e, ##__VA_ARGS__)
-
-#define pipe_cl_warn(__e, ...)						\
-	tr_warn(&pipe_tr, __e, ##__VA_ARGS__)
-
-#define pipe_cl_info(__e, ...)						\
-	tr_info(&pipe_tr, __e, ##__VA_ARGS__)
-
-#define pipe_cl_dbg(__e, ...)						\
-	tr_dbg(&pipe_tr, __e, ##__VA_ARGS__)
-
-/* device tracing */
-#define pipe_err(pipe_p, __e, ...)					\
-	trace_dev_err(trace_pipe_get_tr_ctx, trace_pipe_get_id,		\
-		      trace_pipe_get_subid, pipe_p, __e, ##__VA_ARGS__)
-
-#define pipe_warn(pipe_p, __e, ...)					\
-	trace_dev_warn(trace_pipe_get_tr_ctx, trace_pipe_get_id,	\
-		       trace_pipe_get_subid, pipe_p, __e, ##__VA_ARGS__)
-
-#define pipe_info(pipe_p, __e, ...)					\
-	trace_dev_info(trace_pipe_get_tr_ctx, trace_pipe_get_id,	\
-		       trace_pipe_get_subid, pipe_p, __e, ##__VA_ARGS__)
-
-#define pipe_dbg(pipe_p, __e, ...)					\
-	trace_dev_dbg(trace_pipe_get_tr_ctx, trace_pipe_get_id,		\
-		      trace_pipe_get_subid, pipe_p, __e, ##__VA_ARGS__)
 
 /* Pipeline status to stop execution of current path */
 #define PPL_STATUS_PATH_STOP	1
@@ -86,14 +38,20 @@ extern struct tr_ctx pipe_tr;
 #define PPL_DIR_DOWNSTREAM	0
 #define PPL_DIR_UPSTREAM	1
 
-#define PPL_POSN_OFFSETS \
-	(MAILBOX_STREAM_SIZE / sizeof(struct sof_ipc_stream_posn))
-
 /*
  * Audio pipeline.
  */
 struct pipeline {
-	struct sof_ipc_pipe_new ipc_pipe;
+	uint32_t comp_id;	/**< component id for pipeline */
+	uint32_t pipeline_id;	/**< pipeline id */
+	uint32_t sched_id;	/**< Scheduling component id */
+	uint32_t core;		/**< core we run on */
+	uint32_t period;	/**< execution period in us*/
+	uint32_t priority;	/**< priority level 0 (low) to 10 (max) */
+	uint32_t period_mips;	/**< worst case instruction count per period */
+	uint32_t frames_per_sched;/**< output frames of pipeline, 0 is variable */
+	uint32_t xrun_limit_usecs; /**< report xruns greater than limit */
+	uint32_t time_domain;	/**< scheduling time domain */
 
 	/* runtime status */
 	int32_t xrun_bytes;		/* last xrun length */
@@ -117,22 +75,85 @@ struct pipeline {
 	struct ipc_msg *msg;
 };
 
-/* static pipeline */
-extern struct pipeline *pipeline_static;
-
-struct pipeline_posn {
-	bool posn_offset[PPL_POSN_OFFSETS];	/**< available offsets */
-	spinlock_t lock;			/**< lock mechanism */
+struct pipeline_walk_context {
+	int (*comp_func)(struct comp_dev *cd, struct comp_buffer *buffer,
+			 struct pipeline_walk_context *ctx, int dir);
+	void *comp_data;
+	void (*buff_func)(struct comp_buffer *buffer, void *data);
+	void *buff_data;
+	/**< pipelines to be scheduled after trigger walk */
+	struct list_item pipelines;
+	/*
+	 * If this flag is set, pipeline_for_each_comp() will skip all
+	 * incompletely initialised components, i.e. those, whose .pipeline ==
+	 * NULL. Such components should not be skipped during initialisation
+	 * and clean up, but they should be skipped during streaming.
+	 */
+	bool skip_incomplete;
 };
 
-/**
- * \brief Retrieves pipeline position structure.
- * \return Pointer to pipeline position structure.
+/* generic pipeline data used by pipeline_comp_* functions */
+struct pipeline_data {
+	struct comp_dev *start;
+	struct sof_ipc_pcm_params *params;
+	struct sof_ipc_stream_posn *posn;
+	struct pipeline *p;
+	int cmd;
+};
+
+/*
+ * Pipeline Graph APIs
+ *
+ * These APIs are used to construct and bind pipeline graphs. They are also
+ * used to query pipeline fundamental configuration.
  */
-static inline struct pipeline_posn *pipeline_posn_get(void)
-{
-	return sof_get()->pipeline_posn;
-}
+
+/**
+ * \brief Creates a new pipeline.
+ * \param[in,out] cd Pipeline component device.
+ * \param[in] pipeline_id Pipeline ID number.
+ * \param[in] priority Pipeline scheduling priority.
+ * \param[in] comp_id Pipeline component ID number.
+ * \return New pipeline pointer or NULL.
+ */
+struct pipeline *pipeline_new(struct comp_dev *cd, uint32_t pipeline_id,
+			      uint32_t priority, uint32_t comp_id);
+
+/**
+ * \brief Free's a pipeline.
+ * \param[in] p pipeline.
+ * \return 0 on success.
+ */
+int pipeline_free(struct pipeline *p);
+
+/**
+ * \brief Connect components in a pipeline.
+ * \param[in] comp connecting component.
+ * \param[in] buffer connecting buffer.
+ * \param[in] dir Connection direction.
+ * \return 0 on success.
+ */
+int pipeline_connect(struct comp_dev *comp, struct comp_buffer *buffer,
+		     int dir);
+
+/**
+ * \brief Creates a new pipeline.
+ * \param[in] comp connecting component.
+ * \param[in] buffer connecting buffer.
+ * \param[in] dir Connection direction.
+ */
+void pipeline_disconnect(struct comp_dev *comp, struct comp_buffer *buffer,
+			 int dir);
+
+/**
+ * \brief Completes a pipeline.
+ * \param[in] p pipeline.
+ * \param[in] source Pipeline component device.
+ * \param[in] sink Pipeline component device.
+ * \return 0 on success.
+ */
+int pipeline_complete(struct pipeline *p, struct comp_dev *source,
+		      struct comp_dev *sink);
 
 /**
  * \brief Initializes pipeline position structure.
@@ -141,70 +162,22 @@ static inline struct pipeline_posn *pipeline_posn_get(void)
 void pipeline_posn_init(struct sof *sof);
 
 /**
- * \brief Retrieves first free pipeline position offset.
- * \param[in,out] posn_offset Pipeline position offset to be set.
- * \return Error code.
+ * \brief Resets the pipeline and free runtime resources.
+ * \param[in] p pipeline.
+ * \param[in] host_cd Host DMA component device.
+ * \return 0 on success.
  */
-static inline int pipeline_posn_offset_get(uint32_t *posn_offset)
-{
-	struct pipeline_posn *pipeline_posn = pipeline_posn_get();
-	int ret = -EINVAL;
-	uint32_t i;
-
-	spin_lock(&pipeline_posn->lock);
-
-	for (i = 0; i < PPL_POSN_OFFSETS; ++i) {
-		if (!pipeline_posn->posn_offset[i]) {
-			*posn_offset = i * sizeof(struct sof_ipc_stream_posn);
-			pipeline_posn->posn_offset[i] = true;
-			ret = 0;
-			break;
-		}
-	}
-
-	platform_shared_commit(pipeline_posn, sizeof(*pipeline_posn));
-
-	spin_unlock(&pipeline_posn->lock);
-
-	return ret;
-}
+int pipeline_reset(struct pipeline *p, struct comp_dev *host_cd);
 
 /**
- * \brief Frees pipeline position offset.
- * \param[in] posn_offset Pipeline position offset to be freed.
+ * \brief Walks the pipeline graph for each component.
+ * \param[in] current Current pipeline component.
+ * \param[in] ctx Pipeline graph walk context.
+ * \param[in] dir Walk direction.
+ * \return 0 on success.
  */
-static inline void pipeline_posn_offset_put(uint32_t posn_offset)
-{
-	struct pipeline_posn *pipeline_posn = pipeline_posn_get();
-	int i = posn_offset / sizeof(struct sof_ipc_stream_posn);
-
-	spin_lock(&pipeline_posn->lock);
-
-	pipeline_posn->posn_offset[i] = false;
-
-	platform_shared_commit(pipeline_posn, sizeof(*pipeline_posn));
-
-	spin_unlock(&pipeline_posn->lock);
-}
-
-/* checks if two pipelines have the same scheduling component */
-static inline bool pipeline_is_same_sched_comp(struct pipeline *current,
-					       struct pipeline *previous)
-{
-	return current->sched_comp == previous->sched_comp;
-}
-
-/* checks if pipeline is scheduled with timer */
-static inline bool pipeline_is_timer_driven(struct pipeline *p)
-{
-	return p->ipc_pipe.time_domain == SOF_TIME_DOMAIN_TIMER;
-}
-
-/* checks if pipeline is scheduled on this core */
-static inline bool pipeline_is_this_cpu(struct pipeline *p)
-{
-	return p->ipc_pipe.core == cpu_get_id();
-}
+int pipeline_for_each_comp(struct comp_dev *current,
+			   struct pipeline_walk_context *ctx, int dir);
 
 /**
  * Retrieves pipeline id from pipeline.
@@ -213,52 +186,185 @@ static inline bool pipeline_is_this_cpu(struct pipeline *p)
  */
 static inline uint32_t pipeline_id(struct pipeline *p)
 {
-	return p->ipc_pipe.pipeline_id;
+	return p->pipeline_id;
 }
 
-/* pipeline creation and destruction */
-struct pipeline *pipeline_new(struct sof_ipc_pipe_new *pipe_desc,
-	struct comp_dev *cd);
-int pipeline_free(struct pipeline *p);
+/*
+ * Pipeline configuration APIs
+ *
+ * These APIs are used to configure the runtime parameters of a pipeline.
+ */
 
-/* insert component in pipeline */
-int pipeline_connect(struct comp_dev *comp, struct comp_buffer *buffer,
-		     int dir);
-
-/* complete the pipeline */
-int pipeline_complete(struct pipeline *p, struct comp_dev *source,
-		      struct comp_dev *sink);
-
-/* pipeline parameters */
+/**
+ * \brief Creates a new pipeline.
+ * \param[in] p pipeline.
+ * \param[in] cd Pipeline component device.
+ * \param[in] params Pipeline parameters.
+ * \return 0 on success.
+ */
 int pipeline_params(struct pipeline *p, struct comp_dev *cd,
 		    struct sof_ipc_pcm_params *params);
 
-/* prepare the pipeline for usage */
+/**
+ * \brief Creates a new pipeline.
+ * \param[in] p pipeline.
+ * \param[in,out] cd Pipeline component device.
+ * \return 0 on success.
+ */
 int pipeline_prepare(struct pipeline *p, struct comp_dev *cd);
 
-/* reset the pipeline and free resources */
-int pipeline_reset(struct pipeline *p, struct comp_dev *host_cd);
+/*
+ * Pipeline stream APIs
+ *
+ * These APIs are used to control pipeline processing work.
+ */
 
-/* perform selected cache command on pipeline */
-void pipeline_cache(struct pipeline *p, struct comp_dev *dev, int cmd);
-
-/* trigger pipeline - atomic */
+/**
+ * \brief Trigger pipeline - atomic
+ * \param[in] p pipeline.
+ * \param[in] host_cd Host DMA component.
+ * \param[in] cmd Pipeline trigger command.
+ * \return 0 on success.
+ */
+/*  */
 int pipeline_trigger(struct pipeline *p, struct comp_dev *host_cd, int cmd);
 
-/* static pipeline creation */
-int init_static_pipeline(struct ipc *ipc);
+/**
+ * \brief Copy data along a pipeline.
+ * \param[in] p pipeline.
+ * \return 0 on success.
+ */
+int pipeline_copy(struct pipeline *p);
 
-/* pipeline creation */
-int init_pipeline(void);
-
-/* schedule a copy operation for this pipeline */
-void pipeline_schedule_copy(struct pipeline *p, uint64_t start);
-
-/* get time pipeline timestamps from host to dai */
+/**
+ * \brief Get time pipeline timestamps from host to dai.
+ * \param[in] p pipeline.
+ * \param[in] host_dev Host DMA component.
+ * \param[in,out] posn Pipeline stream position.
+ */
 void pipeline_get_timestamp(struct pipeline *p, struct comp_dev *host_dev,
 			    struct sof_ipc_stream_posn *posn);
 
-/* notify host that we have XRUN */
+/*
+ * Pipeline scheduling APIs
+ *
+ * These APIs are used to schedule pipeline processing work.
+ */
+
+/**
+ * \brief Checks if two pipelines have the same scheduling component.
+ * \param[in] current This pipeline.
+ * \param[in] previous Other pipeline.
+ * \return true if both pipelines are scheduled together.
+ */
+static inline bool pipeline_is_same_sched_comp(struct pipeline *current,
+					       struct pipeline *previous)
+{
+	return current->sched_comp == previous->sched_comp;
+}
+
+/**
+ * \brief Is pipeline is scheduled with timer.
+ * \param[in] p pipeline.
+ * \return true if pipeline uses timer based scheduling.
+ */
+static inline bool pipeline_is_timer_driven(struct pipeline *p)
+{
+	return p->time_domain == SOF_TIME_DOMAIN_TIMER;
+}
+
+/**
+ * \brief Is pipeline is scheduled on this core.
+ * \param[in] p pipeline.
+ * \return true if pipeline core ID == current core ID.
+ */
+static inline bool pipeline_is_this_cpu(struct pipeline *p)
+{
+	return p->core == cpu_get_id();
+}
+
+/**
+ * \brief Free's a pipeline.
+ * \param[in] p pipeline.
+ * \return 0 on success.
+ */
+int pipeline_comp_task_init(struct pipeline *p);
+
+/**
+ * \brief Free's a pipeline.
+ * \param[in] p pipeline.
+ * \param[in] start Pipelien start time in microseconds.
+ */
+void pipeline_schedule_copy(struct pipeline *p, uint64_t start);
+
+/**
+ * \brief Trigger pipeline's scheduling component.
+ * \param[in] p pipeline.
+ * \param[in,out] comp Pipeline component device.
+ * \param[in] ctx Pipeline graph walk context.
+ */
+void pipeline_comp_trigger_sched_comp(struct pipeline *p,
+				      struct comp_dev *comp,
+				      struct pipeline_walk_context *ctx);
+
+/**
+ * \brief Schedule all triggered pipelines.
+ * \param[in] ctx Pipeline graph walk context.
+ * \param[in] cmd Trigger command.
+ */
+void pipeline_schedule_triggered(struct pipeline_walk_context *ctx,
+				 int cmd);
+
+/**
+ * \brief Configure pipeline scheduling.
+ * \param[in] p pipeline.
+ * \param[in] sched_id Scheduling component ID.
+ * \param[in] core DSP core pipeline runs on.
+ * \param[in] period Pipeline scheduling period in us.
+ * \param[in] period_mips Pipeline worst case MCPS per period.
+ * \param[in] frames_per_sched Pipeline frames processed per schedule.
+ * \param[in] time_domain Pipeline scheduling time domain.
+ * \return 0 on success.
+ */
+int pipeline_schedule_config(struct pipeline *p, uint32_t sched_id,
+			     uint32_t core, uint32_t period,
+			     uint32_t period_mips, uint32_t frames_per_sched,
+			     uint32_t time_domain);
+
+/*
+ * Pipeline error handling APIs
+ *
+ * These APIs are used to handle, report and recover from pipeline errors.
+ */
+
+/**
+ * \brief Recover the pipeline from a XRUN condition.
+ * \param[in] p pipeline.
+ * \return 0 on success.
+ */
+int pipeline_xrun_recover(struct pipeline *p);
+
+/**
+ * \brief Perform xrun recovery.
+ * \param[in] p pipeline.
+ * \param[in] cmd Trigger command.
+ * \return 0 on success.
+ */
+int pipeline_xrun_handle_trigger(struct pipeline *p, int cmd);
+
+/**
+ * \brief notify host that we have XRUN.
+ * \param[in] p pipeline.
+ * \param[in] dev Pipeline component device.
+ * \param[in] bytes Number of bytes we have over or under run.
+ */
 void pipeline_xrun(struct pipeline *p, struct comp_dev *dev, int32_t bytes);
+
+/**
+ * \brief Set tolerance for pipeline xrun handling.
+ * \param[in] p pipeline.
+ * \param[in] xrun_limit_usecs Limit in micro secs that pipeline will tolerate.
+ */
+int pipeline_xrun_set_limit(struct pipeline *p, uint32_t xrun_limit_usecs);
 
 #endif /* __SOF_AUDIO_PIPELINE_H__ */

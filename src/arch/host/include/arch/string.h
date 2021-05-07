@@ -20,13 +20,15 @@
 #define arch_bzero(ptr, size) \
 	memset(ptr, 0, size)
 
-
 void *memcpy(void *dest, const void *src, size_t length);
 void *memset(void *dest, int data, size_t count);
 int memset_s(void *dest, size_t dest_size,
 	     int data, size_t count);
 int memcpy_s(void *dest, size_t dest_size,
 	     const void *src, size_t src_size);
+
+void *__vec_memcpy(void *dst, const void *src, size_t len);
+void *__vec_memset(void *dest, int data, size_t src_size);
 
 static inline int arch_memcpy_s(void *dest, size_t dest_size,
 				const void *src, size_t src_size)

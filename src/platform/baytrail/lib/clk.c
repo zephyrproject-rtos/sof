@@ -13,7 +13,6 @@
 #include <sof/sof.h>
 #include <sof/spinlock.h>
 
-
 #if CONFIG_BAYTRAIL
 const struct freq_table platform_cpu_freq[] = {
 	{ 25000000, 25000 },
@@ -121,5 +120,4 @@ void platform_clock_init(struct sof *sof)
 	for (i = 0; i < NUM_CLOCKS; i++)
 		spinlock_init(&sof->clocks[i].lock);
 
-	platform_shared_commit(sof->clocks, sizeof(*sof->clocks) * NUM_CLOCKS);
 }

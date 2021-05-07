@@ -41,8 +41,10 @@ static int32_t knee_curveK(const struct sof_drc_params *p, int32_t x)
  * output and input signal. */
 static int32_t volume_gain(const struct sof_drc_params *p, int32_t x)
 {
-	const int32_t knee_threshold = Q_SHIFT_LEFT(p->knee_threshold, 24, 31);
-	const int32_t linear_threshold = Q_SHIFT_LEFT(p->linear_threshold, 30, 31);
+	const int32_t knee_threshold =
+		sat_int32(Q_SHIFT_LEFT((int64_t)p->knee_threshold, 24, 31));
+	const int32_t linear_threshold =
+		sat_int32(Q_SHIFT_LEFT((int64_t)p->linear_threshold, 30, 31));
 	int32_t exp_knee;
 	int32_t y;
 
@@ -223,6 +225,7 @@ void drc_update_envelope(struct drc_state *state, const struct sof_drc_params *p
 		db_per_frame = Q_MULTSR_32X32((int64_t)db_per_frame, p->kSpacingDb, 30, 0, 24);
 		envelope_rate = db2lin_fixed(db_per_frame); /* Q12.20 */
 	} else {
+		int32_t sat32;
 		/* Attack mode - compression_diff_db should be positive dB */
 
 		/* Fix gremlins. */
@@ -232,9 +235,9 @@ void drc_update_envelope(struct drc_state *state, const struct sof_drc_params *p
 		/* As long as we're still in attack mode, use a rate based off
 		 * the largest compression_diff_db we've encountered so far.
 		 */
+		sat32 = sat_int32(Q_SHIFT_LEFT((int64_t)compression_diff_db, 21, 24));
 		state->max_attack_compression_diff_db =
-			MAX(state->max_attack_compression_diff_db,
-			    Q_SHIFT_LEFT(compression_diff_db, 21, 24));
+			MAX(state->max_attack_compression_diff_db, sat32);
 
 		eff_atten_diff_db =
 			MAX(HALF_Q24, state->max_attack_compression_diff_db); /* Q8.24 */
@@ -246,7 +249,7 @@ void drc_update_envelope(struct drc_state *state, const struct sof_drc_params *p
 		envelope_rate = ONE_Q20 - drc_pow_fixed(x, p->one_over_attack_frames); /* Q12.20 */
 	}
 
-	state->envelope_rate = Q_SHIFT_LEFT(envelope_rate, 20, 30);
+	state->envelope_rate = sat_int32(Q_SHIFT_LEFT((int64_t)envelope_rate, 20, 30));
 	state->scaled_desired_gain = scaled_desired_gain;
 }
 

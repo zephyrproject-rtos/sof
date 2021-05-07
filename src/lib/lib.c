@@ -5,12 +5,14 @@
 // Author: Liam Girdwood <liam.r.girdwood@linux.intel.com>
 
 #include <sof/string.h>
+#include <sof/compiler_info.h>
 
 #include <stddef.h>
 #include <stdint.h>
 
-/* Not needed for host or Zephyr */
-#if !CONFIG_LIBRARY && !__ZEPHYR__
+/* Not needed for host or Zephyr or CC uses LIBC */
+#if !CONFIG_LIBRARY && !__ZEPHYR__ && !defined(CC_USE_LIBC)
+
 /* used by gcc - but uses arch_memcpy internally */
 void *memcpy(void *dest, const void *src, size_t n)
 {
@@ -30,20 +32,7 @@ void *memset(void *s, int c, size_t n)
 
 	return s;
 }
-#endif
 
-int memcpy_s(void *dest, size_t dest_size,
-	     const void *src, size_t src_size)
-{
-	return arch_memcpy_s(dest, dest_size, src, src_size);
-}
-
-int memset_s(void *dest, size_t dest_size, int data, size_t count)
-{
-	return arch_memset_s(dest, dest_size, data, count);
-}
-
-#if !CONFIG_LIBRARY && !__ZEPHYR__
 int memcmp(const void *p, const void *q, size_t count)
 {
 	uint8_t *s1 = (uint8_t *)p;
@@ -57,6 +46,30 @@ int memcmp(const void *p, const void *q, size_t count)
 		count--;
 	}
 	return 0;
+}
+
+#endif
+
+int memcpy_s(void *dest, size_t dest_size,
+	     const void *src, size_t src_size)
+{
+	return arch_memcpy_s(dest, dest_size, src, src_size);
+}
+
+int memset_s(void *dest, size_t dest_size, int data, size_t count)
+{
+	return arch_memset_s(dest, dest_size, data, count);
+}
+
+#if !__XCC || !XCHAL_HAVE_HIFI3 || !CONFIG_LIBRARY
+void *__vec_memcpy(void *dst, const void *src, size_t len)
+{
+	return memcpy(dst, src, len);
+}
+
+void *__vec_memset(void *dest, int data, size_t src_size)
+{
+	return memset(dest, data, src_size);
 }
 #endif
 

@@ -34,11 +34,12 @@ DEBUG_START
 # PCM3 ----> volume -----> iDisp2
 # PCM4 ----> volume -----> iDisp3
 # PCM5 ----> volume -----> iDisp4
+# PCM6 ----> passthrough ----> SSP2 (Bluetooth)
 # PCM99 <---- volume <---- DMIC01 (dmic 48k capture)
 # PCM100 <---- kpb <---- DMIC16K (dmic 16k capture)
 
 
-ifdef(`AMP_SSP',`',`errprint(note: Define AMP_SSP for speaker amp SSP Index)')
+ifdef(`AMP_SSP',`',`fatal_error(note: Define AMP_SSP for speaker amp SSP Index)')
 # Smart amplifier related
 # SSP related
 #define smart amplifier SSP index
@@ -48,7 +49,13 @@ define(`SMART_SSP_NAME', concat(concat(`SSP', AMP_SSP),`-Codec'))
 #define BE dai_link ID
 define(`SMART_BE_ID', 7)
 #define SSP mclk
-define(`SSP_MCLK', 24576000)
+ifdef(`IGO', `define(`SSP_MCLK', 19200000)', `define(`SSP_MCLK', 24576000)')
+#define SSP bclk
+ifdef(`IGO', `define(`SSP_BCLK', 2400000)', `define(`SSP_BCLK', 3072000)')
+#define SSP_TDM_WIDTH
+ifdef(`IGO', `define(`SSP_TDM_WIDTH', 25)', `define(`SSP_TDM_WIDTH', 32)')
+#define SSP_CONFIG_DATA_VALID_BITS
+ifdef(`IGO', `define(`SSP_CONFIG_DATA_VALID_BITS', 24)', `define(`SSP_CONFIG_DATA_VALID_BITS', 32)')
 # Playback related
 define(`SMART_PB_PPL_ID', 1)
 define(`SMART_PB_CH_NUM', 2)
@@ -88,21 +95,42 @@ define(KWD_PIPE_SCH_DEADLINE_US, 20000)
 # include the generic dmic with kwd
 include(`platform/intel/intel-generic-dmic-kwd.m4')
 
+# BT offload support
+define(`BT_PIPELINE_PB_ID', eval(SMART_REF_PPL_ID + 1))
+define(`BT_PIPELINE_CP_ID', eval(SMART_REF_PPL_ID + 2))
+define(`BT_DAI_LINK_ID', eval(SMART_BE_ID + 1))
+define(`BT_PCM_ID', `6')
+define(`HW_CONFIG_ID', `8')
+include(`platform/intel/intel-generic-bt.m4')
+
 dnl PIPELINE_PCM_ADD(pipeline,
 dnl     pipe id, pcm, max channels, format,
 dnl     frames, deadline, priority, core)
 
+ifdef(`INCLUDE_IIR_EQ',
+`
+# Low Latency playback pipeline 2 on PCM 1 using max 2 channels of s32le.
+# Schedule 48 frames per 1000us deadline on core 0 with priority 0
+PIPELINE_PCM_ADD(sof/pipe-eq-iir-volume-playback.m4,
+	2, 1, 2, s32le,
+	1000, 0, 0,
+	48000, 48000, 48000)
+'
+,
+`
 # Low Latency playback pipeline 2 on PCM 1 using max 2 channels of s32le.
 # Schedule 48 frames per 1000us deadline on core 0 with priority 0
 PIPELINE_PCM_ADD(sof/pipe-volume-playback.m4,
-        2, 1, 2, s32le,
+	2, 1, 2, s32le,
 	1000, 0, 0,
 	48000, 48000, 48000)
+')
+
 
 # Low Latency capture pipeline 3 on PCM 1 using max 2 channels of s32le.
 # Schedule 48 frames per 1000us deadline on core 0 with priority 0
 PIPELINE_PCM_ADD(sof/pipe-volume-capture.m4,
-        3, 1, 2, s32le,
+	3, 1, 2, s32le,
 	1000, 0, 0,
 	48000, 48000, 48000)
 
@@ -208,10 +236,10 @@ dnl ssp1-maxmspk, ssp0-RTHeadset
 #SSP 0 (ID: 0)
 DAI_CONFIG(SSP, 0, 0, SSP0-Codec,
         SSP_CONFIG(I2S, SSP_CLOCK(mclk, SSP_MCLK, codec_mclk_in),
-                      SSP_CLOCK(bclk, 3072000, codec_slave),
+                      SSP_CLOCK(bclk, SSP_BCLK, codec_slave),
                       SSP_CLOCK(fsync, 48000, codec_slave),
-                      SSP_TDM(2, 32, 3, 3),
-                      SSP_CONFIG_DATA(SSP, 0, 32)))
+                      SSP_TDM(2, SSP_TDM_WIDTH, 3, 3),
+                      SSP_CONFIG_DATA(SSP, 0, SSP_CONFIG_DATA_VALID_BITS)))
 
 # 4 HDMI/DP outputs (ID: 3,4,5,6)
 DAI_CONFIG(HDA, 0, 3, iDisp1,

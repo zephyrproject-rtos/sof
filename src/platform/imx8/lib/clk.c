@@ -14,7 +14,11 @@
 #include <sof/spinlock.h>
 
 const struct freq_table platform_cpu_freq[] = {
+#ifdef CONFIG_IMX8
 	{ 666000000, 666000 },
+#else /* CONFIG_IMX8X */
+	{ 640000000, 640000 },
+#endif
 };
 
 STATIC_ASSERT(NUM_CPU_FREQ == ARRAY_SIZE(platform_cpu_freq),
@@ -42,5 +46,4 @@ void platform_clock_init(struct sof *sof)
 		spinlock_init(&sof->clocks[i].lock);
 	}
 
-	platform_shared_commit(sof->clocks, sizeof(*sof->clocks) * NUM_CLOCKS);
 }

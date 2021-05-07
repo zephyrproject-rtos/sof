@@ -14,7 +14,7 @@
 #include <sof/debug/panic.h>
 #include <sof/drivers/edma.h>
 #include <sof/drivers/interrupt.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
 #include <sof/drivers/interrupt.h>
 #include <sof/drivers/timer.h>
 #include <sof/lib/alloc.h>
@@ -65,6 +65,8 @@ struct dai_data {
 
 	/* host can read back this value without IPC */
 	uint64_t *dai_pos;
+
+	struct sof_ipc_dai_config *dai_config;	/* dai_config from the host */
 
 	uint64_t wallclock;	/* wall clock at stream start */
 };
@@ -257,6 +259,9 @@ static void dai_free(struct comp_dev *dev)
 
 	dai_put(dd->dai);
 
+	if (dd->dai_config)
+		rfree(dd->dai_config);
+
 	rfree(dd);
 	rfree(dev);
 }
@@ -286,6 +291,25 @@ static int dai_comp_get_hw_params(struct comp_dev *dev,
 	 * stream with different frame_fmt's (using pcm converter)
 	 */
 	params->frame_fmt = dconfig->frame_fmt;
+
+	return 0;
+}
+
+static int dai_comp_hw_params(struct comp_dev *dev,
+			      struct sof_ipc_stream_params *params)
+{
+	struct dai_data *dd = comp_get_drvdata(dev);
+	int ret;
+
+	comp_dbg(dev, "dai_comp_hw_params()");
+
+	/* configure hw dai stream params */
+	ret = dai_hw_params(dd->dai, params);
+	if (ret < 0) {
+		comp_err(dev, "dai_comp_hw_params(): dai_hw_params failed ret %d",
+			 ret);
+		return ret;
+	}
 
 	return 0;
 }
@@ -321,6 +345,67 @@ static int dai_verify_params(struct comp_dev *dev,
 	return 0;
 }
 
+static void dai_data_config(struct comp_dev *dev)
+{
+	struct sof_ipc_comp_config *dconfig = dev_comp_config(dev);
+	struct dai_data *dd = comp_get_drvdata(dev);
+	struct sof_ipc_comp_dai *dai = COMP_GET_IPC(dev, sof_ipc_comp_dai);
+
+	assert(dd->dai_config);
+
+	comp_info(dev, "dai_data_config() dai type = %d index = %d dd %p",
+		  dai->type, dai->dai_index, dd);
+
+	/* cannot configure DAI while active */
+	if (dev->state == COMP_STATE_ACTIVE) {
+		comp_info(dev, "dai_data_config(): Component is in active state.");
+		return;
+	}
+
+	switch (dd->dai_config->type) {
+	case SOF_DAI_INTEL_SSP:
+		/* set dma burst elems to slot number */
+		dd->config.burst_elems = dd->dai_config->ssp.tdm_slots;
+		break;
+	case SOF_DAI_INTEL_DMIC:
+		/* We can use always the largest burst length. */
+		dd->config.burst_elems = 8;
+
+		comp_info(dev, "config->dmic.fifo_bits = %u config->dmic.num_pdm_active = %u",
+			  dd->dai_config->dmic.fifo_bits,
+			  dd->dai_config->dmic.num_pdm_active);
+		break;
+	case SOF_DAI_INTEL_HDA:
+		break;
+	case SOF_DAI_INTEL_ALH:
+		/* SDW HW FIFO always requires 32bit MSB aligned sample data for
+		 * all formats, such as 8/16/24/32 bits.
+		 */
+		dconfig->frame_fmt = SOF_IPC_FRAME_S32_LE;
+		dd->dma_buffer->stream.frame_fmt = dconfig->frame_fmt;
+
+		dd->config.burst_elems =
+			dd->dai->plat_data.fifo[dai->direction].depth;
+
+		/* As with HDA, the DMA channel is assigned in runtime,
+		 * not during topology parsing.
+		 */
+		dd->stream_id = dd->dai_config->alh.stream_id;
+		break;
+	case SOF_DAI_IMX_SAI:
+		COMPILER_FALLTHROUGH;
+	case SOF_DAI_IMX_ESAI:
+		dd->config.burst_elems =
+			dd->dai->plat_data.fifo[dai->direction].depth;
+		break;
+	default:
+		/* other types of DAIs not handled for now */
+		comp_warn(dev, "dai_data_config(): Unknown dai type %d",
+			  dd->dai_config->type);
+		break;
+	}
+}
+
 /* set component audio SSP and DMA configuration */
 static int dai_playback_params(struct comp_dev *dev, uint32_t period_bytes,
 			       uint32_t period_count)
@@ -335,6 +420,12 @@ static int dai_playback_params(struct comp_dev *dev, uint32_t period_bytes,
 	/* set processing function */
 	dd->process = pcm_get_conversion_function(local_fmt, dma_fmt);
 
+	if (!dd->process) {
+		comp_err(dev, "dai_playback_params(): converter function NULL: local fmt %d dma fmt %d\n",
+			 local_fmt, dma_fmt);
+		return -EINVAL;
+	}
+
 	/* set up DMA configuration */
 	config->direction = DMA_DIR_MEM_TO_DEV;
 	config->src_width = get_sample_bytes(dma_fmt);
@@ -344,7 +435,7 @@ static int dai_playback_params(struct comp_dev *dev, uint32_t period_bytes,
 	config->dest_dev = dai_get_handshake(dd->dai, dev->direction,
 					     dd->stream_id);
 	config->is_scheduling_source = comp_is_scheduling_source(dev);
-	config->period = dev->pipeline->ipc_pipe.period;
+	config->period = dev->pipeline->period;
 
 	comp_info(dev, "dai_playback_params() dest_dev = %d stream_id = %d src_width = %d dest_width = %d",
 		  config->dest_dev, dd->stream_id,
@@ -385,6 +476,12 @@ static int dai_capture_params(struct comp_dev *dev, uint32_t period_bytes,
 	/* set processing function */
 	dd->process = pcm_get_conversion_function(dma_fmt, local_fmt);
 
+	if (!dd->process) {
+		comp_err(dev, "dai_capture_params(): converter function NULL: local fmt %d dma fmt %d\n",
+			 local_fmt, dma_fmt);
+		return -EINVAL;
+	}
+
 	/* set up DMA configuration */
 	config->direction = DMA_DIR_DEV_TO_MEM;
 	config->cyclic = 1;
@@ -392,7 +489,7 @@ static int dai_capture_params(struct comp_dev *dev, uint32_t period_bytes,
 	config->src_dev = dai_get_handshake(dd->dai, dev->direction,
 					    dd->stream_id);
 	config->is_scheduling_source = comp_is_scheduling_source(dev);
-	config->period = dev->pipeline->ipc_pipe.period;
+	config->period = dev->pipeline->period;
 
 	/* TODO: Make this code platform-specific or move it driver callback */
 	if (dai_get_info(dd->dai, DAI_INFO_TYPE) == SOF_DAI_INTEL_DMIC) {
@@ -449,10 +546,20 @@ static int dai_params(struct comp_dev *dev,
 
 	comp_dbg(dev, "dai_params()");
 
+	/* configure dai_data first */
+	dai_data_config(dev);
+
 	err = dai_verify_params(dev, params);
 	if (err < 0) {
 		comp_err(dev, "dai_params(): pcm params verification failed.");
 		return -EINVAL;
+	}
+
+	/* params verification passed, so now configure hw dai stream params */
+	err = dai_comp_hw_params(dev, params);
+	if (err < 0) {
+		comp_err(dev, "dai_params(): dai_comp_hw_params failed err %d", err);
+		return err;
 	}
 
 	if (dev->direction == SOF_IPC_STREAM_PLAYBACK)
@@ -548,12 +655,174 @@ static int dai_params(struct comp_dev *dev,
 		dai_capture_params(dev, period_bytes, period_count);
 }
 
+static int dai_config_dma_channel(struct comp_dev *dev, struct sof_ipc_dai_config *config)
+{
+	struct dai_data *dd = comp_get_drvdata(dev);
+	struct sof_ipc_comp_dai *dai = COMP_GET_IPC(dev, sof_ipc_comp_dai);
+	int channel;
+	int handshake;
+
+	assert(config);
+
+	switch (config->type) {
+	case SOF_DAI_INTEL_SSP:
+		COMPILER_FALLTHROUGH;
+	case SOF_DAI_INTEL_DMIC:
+		channel = 0;
+		break;
+	case SOF_DAI_INTEL_HDA:
+		channel = config->hda.link_dma_ch;
+		break;
+	case SOF_DAI_INTEL_ALH:
+		/* As with HDA, the DMA channel is assigned in runtime,
+		 * not during topology parsing.
+		 */
+		channel = config->alh.stream_id;
+		break;
+	case SOF_DAI_IMX_SAI:
+		COMPILER_FALLTHROUGH;
+	case SOF_DAI_IMX_ESAI:
+		handshake = dai_get_handshake(dd->dai, dai->direction,
+					      dd->stream_id);
+		channel = EDMA_HS_GET_CHAN(handshake);
+		break;
+	default:
+		/* other types of DAIs not handled for now */
+		comp_err(dev, "dai_config_dma_channel(): Unknown dai type %d",
+			 config->type);
+		channel = DMA_CHAN_INVALID;
+		break;
+	}
+
+	return channel;
+}
+
+static int dai_config(struct comp_dev *dev, struct sof_ipc_dai_config *config)
+{
+	struct dai_data *dd = comp_get_drvdata(dev);
+	int ret;
+
+	comp_info(dev, "dai_config() dai type = %d index = %d dd %p",
+		  config->type, config->dai_index, dd);
+
+	/* cannot configure DAI while active */
+	if (dev->state == COMP_STATE_ACTIVE) {
+		comp_info(dev, "dai_config(): Component is in active state. Ignore config");
+		return 0;
+	}
+
+	if (dd->chan) {
+		comp_info(dev, "dai_config(): Configured. dma channel index %d, ignore...",
+			  dd->chan->index);
+		return 0;
+	}
+
+	if (config->group_id) {
+		ret = dai_assign_group(dev, config->group_id);
+
+		if (ret)
+			return ret;
+	}
+
+	/* do nothing for asking for channel free, for compatibility. */
+	if (dai_config_dma_channel(dev, config) == DMA_CHAN_INVALID)
+		return 0;
+
+	/* allocated dai_config if not yet */
+	if (!dd->dai_config) {
+		dd->dai_config = rzalloc(SOF_MEM_ZONE_RUNTIME, 0, SOF_MEM_CAPS_RAM,
+					 sizeof(*dd->dai_config));
+		if (!dd->dai_config) {
+			comp_err(dev, "dai_config(): No memory for dai_config.");
+			return -ENOMEM;
+		}
+	}
+
+	*dd->dai_config = *config;
+
+	return 0;
+}
+
+static int dai_config_prepare(struct comp_dev *dev)
+{
+	struct dai_data *dd = comp_get_drvdata(dev);
+	int channel = 0;
+
+	/* cannot configure DAI while active */
+	if (dev->state == COMP_STATE_ACTIVE) {
+		comp_info(dev, "dai_config_prepare(): Component is in active state.");
+		return 0;
+	}
+
+	if (!dd->dai_config) {
+		comp_err(dev, "dai_config is not set yet!");
+		return -EINVAL;
+	}
+
+	if (dd->chan) {
+		comp_info(dev, "dai_config_prepare(): dma channel index %d already configured",
+			  dd->chan->index);
+		return 0;
+	}
+
+	channel = dai_config_dma_channel(dev, dd->dai_config);
+	comp_info(dev, "dai_config_prepare(), channel = %d", channel);
+
+	/* do nothing for asking for channel free, for compatibility. */
+	if (channel == DMA_CHAN_INVALID) {
+		comp_err(dev, "dai_config is not set yet!");
+		return -EINVAL;
+	}
+
+	/* allocate DMA channel */
+	dd->chan = dma_channel_get(dd->dma, channel);
+	if (!dd->chan) {
+		comp_err(dev, "dai_config(): dma_channel_get() failed");
+		dd->chan = NULL;
+		return -EIO;
+	}
+
+	comp_info(dev, "dai_config(): new configured dma channel index %d",
+		  dd->chan->index);
+
+	/* setup callback */
+	notifier_register(dev, dd->chan, NOTIFIER_ID_DMA_COPY,
+			  dai_dma_cb, 0);
+
+	return 0;
+}
+
+static void dai_config_reset(struct comp_dev *dev)
+{
+	struct dai_data *dd = comp_get_drvdata(dev);
+
+	/* cannot configure DAI while active */
+	if (dev->state == COMP_STATE_ACTIVE) {
+		comp_info(dev, "dai_config(): Component is in active state. Ignore resetting");
+		return;
+	}
+
+	/* put the allocated DMA channel first */
+	if (dd->chan) {
+		dma_channel_put(dd->chan);
+		dd->chan = NULL;
+
+		/* remove callback */
+		notifier_unregister(dev, dd->chan,
+				    NOTIFIER_ID_DMA_COPY);
+	}
+}
+
 static int dai_prepare(struct comp_dev *dev)
 {
 	struct dai_data *dd = comp_get_drvdata(dev);
 	int ret = 0;
 
-	comp_dbg(dev, "dai_prepare()");
+	comp_info(dev, "dai_prepare()");
+
+	ret = dai_config_prepare(dev);
+	if (ret < 0)
+		return ret;
 
 	ret = comp_set_state(dev, COMP_TRIGGER_PREPARE);
 	if (ret < 0)
@@ -598,7 +867,9 @@ static int dai_reset(struct comp_dev *dev)
 	struct dai_data *dd = comp_get_drvdata(dev);
 	struct dma_sg_config *config = &dd->config;
 
-	comp_dbg(dev, "dai_reset()");
+	comp_info(dev, "dai_reset()");
+
+	dai_config_reset(dev);
 
 	dma_sg_free(&config->elem_array);
 
@@ -651,11 +922,11 @@ static int dai_comp_trigger_internal(struct comp_dev *dev, int cmd)
 
 		/* only start the DAI if we are not XRUN handling */
 		if (dd->xrun == 0) {
-			/* start the DAI */
-			dai_trigger(dd->dai, cmd, dev->direction);
 			ret = dma_start(dd->chan);
 			if (ret < 0)
 				return ret;
+			/* start the DAI */
+			dai_trigger(dd->dai, cmd, dev->direction);
 		} else {
 			dd->xrun = 0;
 		}
@@ -695,8 +966,21 @@ static int dai_comp_trigger_internal(struct comp_dev *dev, int cmd)
 		COMPILER_FALLTHROUGH;
 	case COMP_TRIGGER_STOP:
 		comp_dbg(dev, "dai_comp_trigger_internal(), STOP");
+/*
+ * Some platforms cannot just simple disable
+ * DMA channel during the transfer,
+ * because it will hang the whole DMA controller.
+ * Therefore, stop the DMA first and let the DAI
+ * drain the FIFO in order to stop the channel
+ * as soon as possible.
+ */
+#if CONFIG_DMA_SUSPEND_DRAIN
 		ret = dma_stop(dd->chan);
 		dai_trigger(dd->dai, cmd, dev->direction);
+#else
+		dai_trigger(dd->dai, cmd, dev->direction);
+		ret = dma_stop(dd->chan);
+#endif
 		break;
 	case COMP_TRIGGER_PAUSE:
 		comp_dbg(dev, "dai_comp_trigger_internal(), PAUSE");
@@ -795,6 +1079,7 @@ static int dai_copy(struct comp_dev *dev)
 {
 	struct dai_data *dd = comp_get_drvdata(dev);
 	uint32_t dma_fmt = dd->dma_buffer->stream.frame_fmt;
+	const uint32_t sampling = get_sample_bytes(dma_fmt);
 	struct comp_buffer *buf = dd->local_buffer;
 	uint32_t avail_bytes = 0;
 	uint32_t free_bytes = 0;
@@ -819,20 +1104,19 @@ static int dai_copy(struct comp_dev *dev)
 	/* calculate minimum size to copy */
 	if (dev->direction == SOF_IPC_STREAM_PLAYBACK) {
 		src_samples = audio_stream_get_avail_samples(&buf->stream);
-		sink_samples = free_bytes / get_sample_bytes(dma_fmt);
+		sink_samples = free_bytes / sampling;
 		samples = MIN(src_samples, sink_samples);
 	} else {
-		src_samples = avail_bytes / get_sample_bytes(dma_fmt);
+		src_samples = avail_bytes / sampling;
 		sink_samples = audio_stream_get_free_samples(&buf->stream);
 		samples = MIN(src_samples, sink_samples);
 
 		/* limit bytes per copy to one period for the whole pipeline
 		 * in order to avoid high load spike
 		 */
-		samples = MIN(samples, dd->period_bytes /
-			      get_sample_bytes(dma_fmt));
+		samples = MIN(samples, dd->period_bytes / sampling);
 	}
-	copy_bytes = samples * get_sample_bytes(dma_fmt);
+	copy_bytes = samples * sampling;
 
 	buffer_unlock(buf, flags);
 
@@ -878,127 +1162,16 @@ static int dai_position(struct comp_dev *dev, struct sof_ipc_stream_posn *posn)
 	return 0;
 }
 
-static int dai_config(struct comp_dev *dev, struct sof_ipc_dai_config *config)
-{
-	struct sof_ipc_comp_config *dconfig = dev_comp_config(dev);
-	struct dai_data *dd = comp_get_drvdata(dev);
-	struct sof_ipc_comp_dai *dai = COMP_GET_IPC(dev, sof_ipc_comp_dai);
-	int channel = 0;
-	int handshake;
-	int ret = 0;
-
-	comp_info(dev, "dai_config() dai type = %d index = %d",
-		  config->type, config->dai_index);
-
-	/* cannot configure DAI while active */
-	if (dev->state == COMP_STATE_ACTIVE) {
-		comp_info(dev, "dai_config(): Component is in active state. Ignore config");
-		return 0;
-	}
-
-	if (config->group_id) {
-		ret = dai_assign_group(dev, config->group_id);
-
-		if (ret)
-			return ret;
-	}
-
-	switch (config->type) {
-	case SOF_DAI_INTEL_SSP:
-		/* set dma burst elems to slot number */
-		dd->config.burst_elems = config->ssp.tdm_slots;
-		break;
-	case SOF_DAI_INTEL_DMIC:
-		comp_dbg(dev, "dai_config(), config->type = SOF_DAI_INTEL_DMIC");
-
-		/* We can use always the largest burst length. */
-		dd->config.burst_elems = 8;
-
-		comp_info(dev, "dai_config(), config->dmic.fifo_bits = %u config->dmic.num_pdm_active = %u",
-			  config->dmic.fifo_bits,
-			  config->dmic.num_pdm_active);
-		break;
-	case SOF_DAI_INTEL_HDA:
-		channel = config->hda.link_dma_ch;
-		comp_info(dev, "dai_config(), channel = %d", channel);
-
-		/*
-		 * For HDA DAIs, the driver sends the DAI_CONFIG IPC
-		 * during every link hw_params and hw_free, apart from the
-		 * the first DAI_CONFIG IPC sent during topology parsing.
-		 * Free the channel that is currently in use before
-		 * assigning the new one.
-		 */
-		if (dd->chan) {
-			dma_channel_put(dd->chan);
-			dd->chan = NULL;
-		}
-		break;
-	case SOF_DAI_INTEL_ALH:
-		/* SDW HW FIFO always requires 32bit MSB aligned sample data for
-		 * all formats, such as 8/16/24/32 bits.
-		 */
-		dconfig->frame_fmt = SOF_IPC_FRAME_S32_LE;
-		dd->dma_buffer->stream.frame_fmt = dconfig->frame_fmt;
-
-		dd->config.burst_elems =
-			dd->dai->plat_data.fifo[dai->direction].depth;
-
-		/* As with HDA, the DMA channel is assigned in runtime,
-		 * not during topology parsing.
-		 */
-		channel = config->alh.stream_id;
-		dd->stream_id = config->alh.stream_id;
-		comp_info(dev, "dai_config(), channel = %d", channel);
-		break;
-	case SOF_DAI_IMX_SAI:
-		handshake = dai_get_handshake(dd->dai, dai->direction,
-					      dd->stream_id);
-		channel = EDMA_HS_GET_CHAN(handshake);
-
-		dd->config.burst_elems =
-			dd->dai->plat_data.fifo[dai->direction].depth;
-		break;
-	case SOF_DAI_IMX_ESAI:
-		handshake = dai_get_handshake(dd->dai, dai->direction,
-					      dd->stream_id);
-		channel = EDMA_HS_GET_CHAN(handshake);
-
-		dd->config.burst_elems =
-			dd->dai->plat_data.fifo[dai->direction].depth;
-		break;
-	default:
-		/* other types of DAIs not handled for now */
-		comp_err(dev, "dai_config(): Unknown dai type %d",
-			 config->type);
-		break;
-	}
-
-	platform_shared_commit(dd->dai, sizeof(*dd->dai));
-
-	if (channel != DMA_CHAN_INVALID) {
-		if (dd->chan)
-			/* remove callback */
-			notifier_unregister(dev, dd->chan,
-					    NOTIFIER_ID_DMA_COPY);
-		else
-			/* get dma channel at first config only */
-			dd->chan = dma_channel_get(dd->dma, channel);
-
-		if (!dd->chan) {
-			comp_err(dev, "dai_config(): dma_channel_get() failed");
-			dd->chan = NULL;
-			return -EIO;
-		}
-
-		/* setup callback */
-		notifier_register(dev, dd->chan, NOTIFIER_ID_DMA_COPY,
-				  dai_dma_cb, 0);
-	}
-
-	return 0;
-}
-
+/**
+ * \brief Get DAI parameters and configure timestamping
+ * \param[in, out] dev DAI device.
+ * \return Error code.
+ *
+ * This function retrieves various DAI parameters such as type, direction, index, and DMA
+ * controller information those are needed when configuring HW timestamping. Note that
+ * DAI must be prepared before this function is used (for DMA information). If not, an error
+ * is returned.
+ */
 static int dai_ts_config(struct comp_dev *dev)
 {
 	struct dai_data *dd = comp_get_drvdata(dev);
@@ -1006,6 +1179,11 @@ static int dai_ts_config(struct comp_dev *dev)
 	struct sof_ipc_comp_dai *dai = COMP_GET_IPC(dev, sof_ipc_comp_dai);
 
 	comp_dbg(dev, "dai_ts_config()");
+	if (!dd->chan) {
+		comp_err(dev, "dai_ts_config(), No DMA channel information");
+		return -EINVAL;
+	}
+
 	cfg->type = dd->dai->drv->type;
 	cfg->direction = dai->direction;
 	cfg->index = dd->dai->index;

@@ -55,21 +55,33 @@ dnl PIPELINE_PCM_ADD(pipeline,
 dnl     pipe id, pcm, max channels, format,
 dnl     frames, deadline, priority, core)
 
-# Low Latency playback pipeline 1 on PCM 0 using max 2 channels of s24le.
+# Low Latency playback pipeline 1 on PCM 0 using max 2 channels of s32le.
 # Schedule 48 frames per 1000us deadline on core 0 with priority 0
 PIPELINE_PCM_ADD(sof/pipe-volume-playback.m4,
 	1, 0, 2, s32le,
 	1000, 0, 0,
 	48000, 48000, 48000)
 
-# Low Latency playback pipeline 2 on PCM 1 using max 2 channels of s24le.
+ifdef(`INCLUDE_IIR_EQ',
+`
+# Low Latency playback pipeline 2 on PCM 1 using max 2 channels of s32le.
+# Schedule 48 frames per 1000us deadline on core 0 with priority 0
+PIPELINE_PCM_ADD(sof/pipe-eq-iir-volume-playback.m4,
+	2, 1, 2, s32le,
+	1000, 0, 0,
+	48000, 48000, 48000)
+'
+,
+`
+# Low Latency playback pipeline 2 on PCM 1 using max 2 channels of s32le.
 # Schedule 48 frames per 1000us deadline on core 0 with priority 0
 PIPELINE_PCM_ADD(sof/pipe-volume-playback.m4,
 	2, 1, 2, s32le,
 	1000, 0, 0,
 	48000, 48000, 48000)
+')
 
-# Low Latency capture pipeline 3 on PCM 1 using max 2 channels of s24le.
+# Low Latency capture pipeline 3 on PCM 1 using max 2 channels of s32le.
 # Schedule 48 frames per 1000us deadline on core 0 with priority 0
 PIPELINE_PCM_ADD(sof/pipe-volume-capture.m4,
 	3, 1, 2, s32le,

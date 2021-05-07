@@ -5,12 +5,13 @@
 // Author: Curtis Malainey <cujomalainey@chromium.org>
 
 #include <sof/sof.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/driver.h>
 #include <sof/drivers/timer.h>
 #include <sof/lib/agent.h>
 #include <sof/schedule/edf_schedule.h>
 #include <sof/schedule/ll_schedule_domain.h>
 #include <sof/lib/mailbox.h>
+#include <sof/lib/dai.h>
 
 SHARED_DATA struct timer timer = {};
 
@@ -60,3 +61,17 @@ int platform_init(struct sof *sof)
 
 	return 0;
 }
+
+#ifdef __ZEPHYR__
+/* Stubs for unsupported architectures */
+
+/* Platform */
+int platform_boot_complete(uint32_t boot_message)
+{
+	return 0;
+}
+
+/* Logging */
+LOG_MODULE_REGISTER(sof);
+
+#endif

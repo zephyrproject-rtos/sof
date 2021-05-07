@@ -18,7 +18,7 @@
 #include <sof/drivers/dw-dma.h>
 #include <sof/drivers/idc.h>
 #include <sof/drivers/interrupt.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/common.h>
 #include <sof/drivers/timer.h>
 #include <sof/fw-ready-metadata.h>
 #include <sof/lib/agent.h>
@@ -302,10 +302,10 @@ int platform_boot_complete(uint32_t boot_message)
 	/* tell host we are ready */
 #if CAVS_VERSION == CAVS_VERSION_1_5
 	ipc_write(IPC_DIPCIE, SRAM_WINDOW_HOST_OFFSET(0) >> 12);
-	ipc_write(IPC_DIPCI, 0x80000000 | SOF_IPC_FW_READY);
+	ipc_write(IPC_DIPCI, IPC_DIPCI_BUSY | SOF_IPC_FW_READY);
 #else
 	ipc_write(IPC_DIPCIDD, SRAM_WINDOW_HOST_OFFSET(0) >> 12);
-	ipc_write(IPC_DIPCIDR, 0x80000000 | SOF_IPC_FW_READY);
+	ipc_write(IPC_DIPCIDR, IPC_DIPCIDR_BUSY | SOF_IPC_FW_READY);
 #endif
 	return 0;
 }
@@ -332,6 +332,7 @@ static void platform_init_hw(void)
 }
 #endif
 
+/* Runs on the primary core only */
 int platform_init(struct sof *sof)
 {
 #if CONFIG_DW_SPI
@@ -386,8 +387,7 @@ int platform_init(struct sof *sof)
 
 	/* init low latency timer domain and scheduler */
 	sof->platform_timer_domain =
-		timer_domain_init(sof->platform_timer, PLATFORM_DEFAULT_CLOCK,
-				  CONFIG_SYSTICK_PERIOD);
+		timer_domain_init(sof->platform_timer, PLATFORM_DEFAULT_CLOCK);
 	scheduler_init_ll(sof->platform_timer_domain);
 
 	/* init the system agent */

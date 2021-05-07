@@ -8,7 +8,9 @@
 
 #include <cavs/version.h>
 #include <sof/drivers/interrupt.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/driver.h>
+#include <sof/ipc/msg.h>
+#include <sof/ipc/schedule.h>
 #include <sof/lib/mailbox.h>
 #include <sof/lib/memory.h>
 #include <sof/lib/pm_runtime.h>
@@ -21,21 +23,10 @@
 #include <sof/schedule/task.h>
 #include <sof/spinlock.h>
 #include <ipc/header.h>
-#if CAVS_VERSION >= CAVS_VERSION_1_8
-#include <ipc/header-intel-cavs.h>
-#include <ipc/pm.h>
-#include <cavs/drivers/sideband-ipc.h>
-#endif
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
-#if CAVS_VERSION >= CAVS_VERSION_1_8
-
-#define CAVS_IPC_TYPE_S(x)		((x) & CAVS_IPC_TYPE_MASK)
-
-#endif
 
 /* 8fa1d42f-bc6f-464b-867f-547af08834da */
 DECLARE_SOF_UUID("ipc-task", ipc_task_uuid, 0x8fa1d42f, 0xbc6f, 0x464b,
@@ -138,41 +129,44 @@ static void ipc_irq_handler(void *arg)
 }
 
 #if CAVS_VERSION >= CAVS_VERSION_1_8
-static struct sof_ipc_cmd_hdr *ipc_cavs_read_set_d0ix(uint32_t dr, uint32_t dd)
+int ipc_platform_compact_read_msg(ipc_cmd_hdr *hdr, int words)
 {
-	struct sof_ipc_pm_gate *cmd = ipc_get()->comp_data;
+	uint32_t *chdr = (uint32_t *)hdr;
 
-	cmd->hdr.cmd = SOF_IPC_GLB_PM_MSG | SOF_IPC_PM_GATE;
-	cmd->hdr.size = sizeof(*cmd);
-	cmd->flags = dd & CAVS_IPC_MOD_SETD0IX_BIT_MASK;
+	/* compact messages are 2 words on CAVS 1.8 onwards */
+	if (words != 2)
+		return 0;
 
-	return &cmd->hdr;
+	chdr[0] = ipc_read(IPC_DIPCTDR);
+	chdr[1] = ipc_read(IPC_DIPCTDD);
+
+	return 2; /* number of words read */
 }
 
-static struct sof_ipc_cmd_hdr *ipc_compact_read_msg(void)
+int ipc_platform_compact_write_msg(ipc_cmd_hdr *hdr, int words)
 {
-	struct sof_ipc_cmd_hdr *hdr;
-	uint32_t dr;
-	uint32_t dd;
+	uint32_t *chdr = (uint32_t *)hdr;
 
-	dr = ipc_read(IPC_DIPCTDR);
-	dd = ipc_read(IPC_DIPCTDD);
+	/* compact messages are 2 words on CAVS 1.8 onwards */
+	if (words != 2)
+		return 0;
 
-	/* if there is no cAVS module IPC in regs go the previous path */
-	if (!(dr & CAVS_IPC_MSG_TGT))
-		return mailbox_validate();
+	/* command complete will set the busy/done bits */
+	ipc_write(IPC_DIPCTDR, chdr[0] & ~IPC_DIPCTDR_BUSY);
+	ipc_write(IPC_DIPCTDD, chdr[1]);
 
-	switch (CAVS_IPC_TYPE_S(dr)) {
-	case CAVS_IPC_MOD_SET_D0IX:
-		hdr = ipc_cavs_read_set_d0ix(dr, dd);
-		break;
-	default:
-		return NULL;
-	}
+	return 2; /* number of words written */
+}
 
-	platform_shared_commit(hdr, hdr->size);
+#else
+int ipc_platform_compact_write_msg(ipc_cmd_hdr *hdr, int words)
+{
+	return 0; /* number of words written - not used on CAVS1.5 */
+}
 
-	return hdr;
+int ipc_platform_compact_read_msg(ipc_cmd_hdr *hdr, int words)
+{
+	return 0; /* number of words read - not used on CAVS1.5 */
 }
 #endif
 
@@ -181,8 +175,7 @@ enum task_state ipc_platform_do_cmd(void *data)
 #if !CONFIG_SUECREEK
 	struct ipc *ipc = data;
 #endif
-	struct sof_ipc_cmd_hdr *hdr;
-	struct sof_ipc_reply reply;
+	ipc_cmd_hdr *hdr;
 
 #if CAVS_VERSION >= CAVS_VERSION_1_8
 	hdr = ipc_compact_read_msg();
@@ -190,26 +183,16 @@ enum task_state ipc_platform_do_cmd(void *data)
 	hdr = mailbox_validate();
 #endif
 	/* perform command */
-	if (hdr)
-		ipc_cmd(hdr);
-	else {
-		/* send invalid command error in reply */
-		reply.error = -EINVAL;
-		reply.hdr.cmd = SOF_IPC_GLB_REPLY;
-		reply.hdr.size = sizeof(reply);
-		mailbox_hostbox_write(0, &reply, sizeof(reply));
-	}
+	ipc_cmd(hdr);
 
 	/* are we about to enter D3 ? */
 #if !CONFIG_SUECREEK
 	if (ipc->pm_prepare_D3) {
-		platform_shared_commit(ipc, sizeof(*ipc));
 
 		/* no return - memory will be powered off and IPC sent */
 		platform_pm_runtime_power_off();
 	}
 
-	platform_shared_commit(ipc, sizeof(*ipc));
 #endif
 
 	return SOF_TASK_STATE_COMPLETED;
@@ -238,14 +221,12 @@ void ipc_platform_complete_cmd(void *data)
 
 #if CONFIG_SUECREEK
 	if (ipc->pm_prepare_D3) {
-		platform_shared_commit(ipc, sizeof(*ipc));
 
 		//TODO: add support for Icelake
 		while (1)
 			wait_for_interrupt(0);
 	}
 
-	platform_shared_commit(ipc, sizeof(*ipc));
 #endif
 }
 
@@ -278,13 +259,10 @@ int ipc_platform_send_msg(struct ipc_msg *msg)
 	ipc_write(IPC_DIPCI, IPC_DIPCI_BUSY | msg->header);
 #else
 	ipc_write(IPC_DIPCIDD, 0);
-	ipc_write(IPC_DIPCIDR, 0x80000000 | msg->header);
+	ipc_write(IPC_DIPCIDR, IPC_DIPCIDR_BUSY | msg->header);
 #endif
 
-	platform_shared_commit(msg, sizeof(*msg));
-
 out:
-	platform_shared_commit(ipc, sizeof(*ipc));
 
 	return ret;
 }
@@ -309,8 +287,6 @@ int platform_ipc_init(struct ipc *ipc)
 
 	/* enable IPC interrupts from host */
 	ipc_write(IPC_DIPCCTL, IPC_DIPCCTL_IPCIDIE | IPC_DIPCCTL_IPCTBIE);
-
-	platform_shared_commit(ipc, sizeof(*ipc));
 
 	return 0;
 }
@@ -349,7 +325,6 @@ int ipc_platform_poll_is_cmd_pending(void)
 	dipct = ipc_read(IPC_DIPCT);
 	dipcctl = ipc_read(IPC_DIPCCTL);
 
-
 #else
 	uint32_t dipctdr;
 
@@ -383,7 +358,6 @@ int ipc_platform_poll_is_host_ready(void)
 
 	dipcie = ipc_read(IPC_DIPCIE);
 	dipcctl = ipc_read(IPC_DIPCCTL);
-
 
 #else
 	uint32_t dipcida;
@@ -423,8 +397,6 @@ int ipc_platform_poll_is_host_ready(void)
 	return 0;
 }
 
-
-
 int ipc_platform_poll_tx_host_msg(struct ipc_msg *msg)
 {
 
@@ -446,11 +418,10 @@ int ipc_platform_poll_tx_host_msg(struct ipc_msg *msg)
 	ipc_write(IPC_DIPCI, IPC_DIPCI_BUSY | msg->header);
 #else
 	ipc_write(IPC_DIPCIDD, 0);
-	ipc_write(IPC_DIPCIDR, 0x80000000 | msg->header);
+	ipc_write(IPC_DIPCIDR, IPC_DIPCIDR_BUSY | msg->header);
 #endif
 
 	/* message sent */
-	platform_shared_commit(msg, sizeof(*msg));
 	return 1;
 }
 

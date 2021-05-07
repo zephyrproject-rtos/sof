@@ -93,8 +93,12 @@ else()
 	set(XTENSA_C_FLAGS -mtext-section-literals)
 endif()
 
-# linker flags
-target_link_libraries(sof_options INTERFACE ${stdlib_flag} -lgcc -Wl,--no-check-sections -ucall_user_start -Wl,-static)
+# linker flags - GCC >= 10.x uses libc
+if (CMAKE_COMPILER_IS_GNUCC AND CMAKE_C_COMPILER_VERSION VERSION_GREATER 10.0)
+	target_link_libraries(sof_options INTERFACE ${stdlib_flag} -lgcc -lc -Wl,--no-check-sections -ucall_user_start -Wl,-static)
+else()
+	target_link_libraries(sof_options INTERFACE ${stdlib_flag} -lgcc -Wl,--no-check-sections -ucall_user_start -Wl,-static)
+endif()
 
 # C & ASM flags
 target_compile_options(sof_options INTERFACE ${stdlib_flag} -fno-inline-functions ${XTENSA_C_ASM_FLAGS})
@@ -112,7 +116,17 @@ target_compile_options(sof_options INTERFACE ${stdlib_flag} -fno-inline-function
 
 # No space between -imacros and its argument to avoid CMake
 # de-duplication "feature"
-target_compile_options(sof_options INTERFACE $<$<COMPILE_LANGUAGE:C>: -${optimization_flag} -g -Wall -Werror -Wl,-EL -Wmissing-prototypes -Wpointer-arith ${XTENSA_C_FLAGS}> -imacros${CONFIG_H_PATH})
+target_compile_options(sof_options INTERFACE
+	$<$<COMPILE_LANGUAGE:C>:
+		-${optimization_flag} -g
+		-Wall -Werror
+		-Wl,-EL
+		-Wmissing-prototypes
+		-Wpointer-arith
+		${XTENSA_C_FLAGS}
+	>
+	-imacros${CONFIG_H_PATH}
+	)
 
 if(BUILD_UNIT_TESTS)
 	# rest of this file is not needed for unit tests
@@ -130,9 +144,6 @@ endif()
 # linker scripts
 
 function(sof_add_ld_script binary_name script_name)
-	if(NOT EXISTS ${DOT_CONFIG_PATH})
-		return()
-	endif()
 
 	set(lds_in ${PROJECT_SOURCE_DIR}/src/platform/${platform_folder}/${script_name}.in)
 	set(lds_out ${PROJECT_BINARY_DIR}/${script_name})
@@ -375,13 +386,18 @@ endif()
 # what they build in the moment.
 set(silenceUnusedWarning "${MEU_OPENSSL}")
 
-if(MEU_PATH OR DEFINED MEU_NO_SIGN)
+if(MEU_PATH OR DEFINED MEU_NO_SIGN) # Don't sign with rimage
 	if(NOT DEFINED MEU_OFFSET)
 		execute_process(
 			COMMAND ${MEU_PATH}/meu -ver
 			OUTPUT_VARIABLE MEU_VERSION_FULL_TEXT
 			OUTPUT_STRIP_TRAILING_WHITESPACE
+			RESULT_VARIABLE meu_ver_res
 		)
+		if(NOT ${meu_ver_res} EQUAL 0)
+			message(WARNING "${MEU_PATH}/meu -ver"
+			  " failed with: ${meu_ver_res}")
+		endif()
 
 		string(REGEX MATCH "Version:[\t\n ]*([^\t\n ]+)" ignored "${MEU_VERSION_FULL_TEXT}")
 		set(MEU_VERSION ${CMAKE_MATCH_1})
@@ -394,7 +410,10 @@ if(MEU_PATH OR DEFINED MEU_NO_SIGN)
 			set(MEU_OFFSET 1344)
 		endif()
 	endif()
+	message(STATUS MEU_OFFSET=${MEU_OFFSET})
 
+	# Passing -s ${MEU_OFFSET} disables rimage signing and produces
+	# one .uns file and one .met file instead of a .ri file.
 	add_custom_target(
 		run_rimage
 		COMMAND ${PROJECT_BINARY_DIR}/rimage_ep/build/rimage
@@ -441,7 +460,7 @@ if(MEU_PATH OR DEFINED MEU_NO_SIGN)
 			USES_TERMINAL
 		)
 	endif()
-else()
+else() # sign with rimage
 	add_custom_target(
 		run_rimage
 		COMMAND ${PROJECT_BINARY_DIR}/rimage_ep/build/rimage
@@ -465,7 +484,7 @@ else()
 	endif()
 
 	add_custom_target(run_meu DEPENDS run_rimage)
-endif()
+endif() # sign with MEU / nothing / rimage
 
 if(NOT DEFINED FIRMWARE_NAME)
 	set(fw_output_name "${fw_name}")
@@ -504,7 +523,9 @@ else()
 	add_custom_target(
 		bin ALL
 		COMMAND ${CMAKE_COMMAND} -E copy sof-${fw_name}.ri ${PROJECT_BINARY_DIR}/sof-${fw_output_name}.ri
+		COMMAND ${CMAKE_COMMAND} -E copy sof-${fw_name}.ri ${PROJECT_BINARY_DIR}/sof.ri
 		COMMAND ${CMAKE_COMMAND} -E copy sof-${fw_name}.ldc ${PROJECT_BINARY_DIR}/sof-${fw_output_name}.ldc
+		COMMAND ${CMAKE_COMMAND} -E copy sof-${fw_name}.ldc ${PROJECT_BINARY_DIR}/sof.ldc
 		DEPENDS run_meu bin_extras glue_binary_files
 		VERBATIM
 		USES_TERMINAL

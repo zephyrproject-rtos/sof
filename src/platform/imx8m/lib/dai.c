@@ -15,6 +15,24 @@
 
 static SHARED_DATA struct dai sai[] = {
 {
+	.index = 1,
+	.plat_data = {
+		.base = SAI_1_BASE,
+		.fifo[SOF_IPC_STREAM_PLAYBACK] = {
+			.offset = SAI_1_BASE + REG_SAI_TDR0,
+			.depth = 128, /* in 4 bytes words */
+			/* Handshake is SDMA hardware event */
+			.handshake = 1,
+		},
+		.fifo[SOF_IPC_STREAM_CAPTURE] = {
+			.offset = SAI_1_BASE + REG_SAI_RDR0,
+			.depth = 128, /* in 4 bytes words */
+			.handshake = 0,
+		},
+	},
+	.drv = &sai_driver,
+},
+{
 	.index = 3,
 	.plat_data = {
 		.base = SAI_3_BASE,
@@ -54,8 +72,6 @@ int dai_init(struct sof *sof)
 	/* initialize spin locks early to enable ref counting */
 	for (i = 0; i < ARRAY_SIZE(sai); i++)
 		spinlock_init(&sai[i].lock);
-
-	platform_shared_commit(sai, sizeof(*sai));
 
 	sof->dai_info = &lib_dai;
 

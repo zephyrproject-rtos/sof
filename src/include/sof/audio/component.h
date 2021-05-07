@@ -215,6 +215,7 @@ enum comp_endpoint_type {
  * to comp_set_attribute().
  */
 enum comp_copy_type {
+	COMP_COPY_INVALID = -1,	/**< Invalid */
 	COMP_COPY_NORMAL = 0,	/**< Normal */
 	COMP_COPY_BLOCKING,	/**< Blocking */
 	COMP_COPY_ONE_SHOT,	/**< One-shot */
@@ -311,12 +312,20 @@ struct comp_ops {
 	/**
 	 * Prepares component after params are set.
 	 * @param dev Component device.
+	 *
+	 * Prepare should be used to get the component ready for starting
+	 * processing after it's hw_params are known or after an XRUN.
 	 */
 	int (*prepare)(struct comp_dev *dev);
 
 	/**
 	 * Resets component.
 	 * @param dev Component device.
+	 *
+	 * Resets the component state and any hw_params to default component
+	 * state. Should also free any resources acquired during hw_params.
+	 * TODO: Some components are not compliant here wrt reset(). Fix this
+	 * in v1.8.
 	 */
 	int (*reset)(struct comp_dev *dev);
 
@@ -334,6 +343,16 @@ struct comp_ops {
 	 */
 	int (*position)(struct comp_dev *dev,
 		struct sof_ipc_stream_posn *posn);
+
+	/**
+	 * Gets attribute in component.
+	 * @param dev Component device.
+	 * @param type Attribute type.
+	 * @param value Attribute value.
+	 * @return 0 if succeeded, error code otherwise.
+	 */
+	int (*get_attribute)(struct comp_dev *dev, uint32_t type,
+			     void *value);
 
 	/**
 	 * Sets attribute in component.

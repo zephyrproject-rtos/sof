@@ -11,7 +11,7 @@
 #include <sof/audio/pipeline.h>
 #include <sof/common.h>
 #include <sof/debug/panic.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/dma.h>
 #include <sof/lib/mailbox.h>
@@ -347,17 +347,18 @@ static uint32_t host_get_copy_bytes_normal(struct comp_dev *dev)
 	buffer_lock(hd->local_buffer, &flags);
 
 	/* calculate minimum size to copy */
-	if (dev->direction == SOF_IPC_STREAM_PLAYBACK)
+	if (dev->direction == SOF_IPC_STREAM_PLAYBACK) {
 		/* limit bytes per copy to one period for the whole pipeline
 		 * in order to avoid high load spike
 		 */
-		copy_bytes = MIN(hd->period_bytes,
-				 MIN(avail_bytes,
-				     audio_stream_get_free_bytes(&hd->local_buffer->stream)));
-	else
-		copy_bytes = MIN(
-			audio_stream_get_avail_bytes(&hd->local_buffer->stream), free_bytes);
-
+		const uint32_t free_bytes =
+			audio_stream_get_free_bytes(&hd->local_buffer->stream);
+		copy_bytes = MIN(hd->period_bytes, MIN(avail_bytes, free_bytes));
+	} else {
+		const uint32_t avail_bytes =
+			audio_stream_get_avail_bytes(&hd->local_buffer->stream);
+		copy_bytes = MIN(avail_bytes, free_bytes);
+	}
 	buffer_unlock(hd->local_buffer, flags);
 
 	/* copy_bytes should be aligned to minimum possible chunk of
@@ -721,7 +722,7 @@ static int host_params(struct comp_dev *dev,
 	}
 
 	/* calculate DMA buffer size */
-	buffer_size = ALIGN_UP(period_count * period_bytes, align);
+	buffer_size = ALIGN_UP(period_bytes, align) * period_count;
 
 	/* alloc DMA buffer or change its size if exists */
 	if (hd->dma_buffer) {
@@ -755,7 +756,7 @@ static int host_params(struct comp_dev *dev,
 	config->cyclic = 0;
 	config->irq_disabled = pipeline_is_timer_driven(dev->pipeline);
 	config->is_scheduling_source = comp_is_scheduling_source(dev);
-	config->period = dev->pipeline->ipc_pipe.period;
+	config->period = dev->pipeline->period;
 
 	host_elements_reset(dev);
 
@@ -894,6 +895,22 @@ static int host_copy(struct comp_dev *dev)
 	return hd->copy(dev);
 }
 
+static int host_get_attribute(struct comp_dev *dev, uint32_t type,
+			      void *value)
+{
+	struct host_data *hd = comp_get_drvdata(dev);
+
+	switch (type) {
+	case COMP_ATTR_COPY_TYPE:
+		*(enum comp_copy_type *)value = hd->copy_type;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int host_set_attribute(struct comp_dev *dev, uint32_t type,
 			      void *value)
 {
@@ -926,6 +943,7 @@ static const struct comp_driver comp_host = {
 		.copy		= host_copy,
 		.prepare	= host_prepare,
 		.position	= host_position,
+		.get_attribute	= host_get_attribute,
 		.set_attribute	= host_set_attribute,
 	},
 };

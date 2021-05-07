@@ -60,8 +60,6 @@ static inline void comp_free(struct comp_dev *dev)
  */
 static inline void comp_shared_commit(struct comp_dev *dev)
 {
-	if (dev->is_shared)
-		platform_shared_commit(dev, sizeof(*dev));
 }
 
 /**
@@ -122,7 +120,7 @@ static inline int comp_dai_get_hw_params(struct comp_dev *dev,
 static inline int comp_cmd(struct comp_dev *dev, int cmd, void *data,
 			   int max_data_size)
 {
-	struct sof_ipc_ctrl_data *cdata = data;
+	struct sof_ipc_ctrl_data *cdata = ASSUME_ALIGNED(data, 4);
 	int ret = -EINVAL;
 
 	if (cmd == COMP_CMD_SET_DATA &&
@@ -205,6 +203,20 @@ static inline int comp_copy(struct comp_dev *dev)
 		ret = dev->drv->ops.copy(dev);
 		perf_cnt_stamp(&dev->pcd, comp_perf_info, dev);
 	}
+	comp_shared_commit(dev);
+
+	return ret;
+}
+
+/** See comp_ops::get_attribute */
+static inline int comp_get_attribute(struct comp_dev *dev, uint32_t type,
+				     void *value)
+{
+	int ret = 0;
+
+	if (dev->drv->ops.get_attribute)
+		ret = dev->drv->ops.get_attribute(dev, type, value);
+
 	comp_shared_commit(dev);
 
 	return ret;

@@ -12,7 +12,7 @@
 #include <sof/audio/pipeline.h>
 #include <sof/common.h>
 #include <sof/debug/panic.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/memory.h>
 #include <sof/lib/uuid.h>
@@ -441,7 +441,7 @@ static int fir_cmd_set_data(struct comp_dev *dev,
 static int eq_fir_cmd(struct comp_dev *dev, int cmd, void *data,
 		      int max_data_size)
 {
-	struct sof_ipc_ctrl_data *cdata = data;
+	struct sof_ipc_ctrl_data *cdata = ASSUME_ALIGNED(data, 4);
 	int ret = 0;
 
 	comp_info(dev, "eq_fir_cmd()");

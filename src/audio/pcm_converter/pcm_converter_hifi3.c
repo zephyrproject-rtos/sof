@@ -37,7 +37,7 @@ static void pcm_converter_setup_circular(const struct audio_stream *source)
 	AE_SETCEND0(source->end_addr);
 }
 
-#if CONFIG_FORMAT_S16LE && CONFIG_FORMAT_S24LE
+#if CONFIG_PCM_CONVERTER_FORMAT_S16LE && CONFIG_PCM_CONVERTER_FORMAT_S24LE
 
 /**
  * \brief HiFi3 enabled PCM conversion from 16 bit to 24 bit.
@@ -251,9 +251,9 @@ static int pcm_convert_s24_to_s16(const struct audio_stream *source,
 	return samples;
 }
 
-#endif /* CONFIG_FORMAT_S16LE && CONFIG_FORMAT_S24LE */
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_S16LE && CONFIG_PCM_CONVERTER_FORMAT_S24LE */
 
-#if CONFIG_FORMAT_S16LE && CONFIG_FORMAT_S32LE
+#if CONFIG_PCM_CONVERTER_FORMAT_S16LE && CONFIG_PCM_CONVERTER_FORMAT_S32LE
 
 /**
  * \brief HiFi3 enabled PCM conversion from 16 bit to 32 bit.
@@ -446,9 +446,9 @@ static int pcm_convert_s32_to_s16(const struct audio_stream *source,
 	return samples;
 }
 
-#endif /* CONFIG_FORMAT_S16LE && CONFIG_FORMAT_S32LE */
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_S16LE && CONFIG_PCM_CONVERTER_FORMAT_S32LE */
 
-#if CONFIG_FORMAT_S24LE && CONFIG_FORMAT_S32LE
+#if CONFIG_PCM_CONVERTER_FORMAT_S24LE && CONFIG_PCM_CONVERTER_FORMAT_S32LE
 
 /**
  * \brief HiFi3 enabled PCM conversion from 24 bit to 32 bit.
@@ -623,10 +623,20 @@ static int pcm_convert_s32_to_s24(const struct audio_stream *source,
 	return samples;
 }
 
-#endif /* CONFIG_FORMAT_S24LE && CONFIG_FORMAT_S32LE */
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_S24LE && CONFIG_PCM_CONVERTER_FORMAT_S32LE */
 
 #if XCHAL_HAVE_FP
-#if CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_S16LE
+
+static inline int _round_s(xtfloat x)
+{
+#if defined(XT_ROUND_S)
+	return XT_ROUND_S(x, 15);
+#else
+	return XT_TRUNC_S(XT_FIROUND_S(x), 15);
+#endif
+}
+
+#if CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_S16LE
 
 /**
  * \brief HiFi3 enabled PCM conversion from 16 bit to IEEE-754 float.
@@ -678,7 +688,7 @@ static void pcm_convert_f_to_s16_lin(const void *psrc, void *pdst,
 		XT_xtfloat_loadip(x, in, sizeof(x));
 
 		/* shift and round */
-		y = XT_ROUND_S(x, 15);
+		y = _round_s(x);
 
 		/* store one 16 bit sample */
 		AE_S16_0_IP(y, (ae_int16 *)out, sizeof(ae_int16));
@@ -716,9 +726,9 @@ static int pcm_convert_f_to_s16(const struct audio_stream *source,
 	return pcm_convert_as_linear(source, ioffset, sink, ooffset, samples,
 				     pcm_convert_f_to_s16_lin);
 }
-#endif /* CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_S16LE */
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_S16LE */
 
-#if CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_S24LE
+#if CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_S24LE
 
 /**
  * \brief HiFi3 enabled PCM conversion from  24 bit to IEEE-754 float.
@@ -777,7 +787,8 @@ static void pcm_convert_f_to_s24_lin(const void *psrc, void *pdst,
 
 		/* shift and round */
 		x = x * ratio;
-		y1 = XT_ROUND_S(x, 15);
+		y1 = _round_s(x);
+
 		y1 = AE_SAT24S((ae_f32x2)y1);
 
 		/* store one 24 bit sample in 32 bit memory size */
@@ -816,9 +827,9 @@ static int pcm_convert_f_to_s24(const struct audio_stream *source,
 	return pcm_convert_as_linear(source, ioffset, sink, ooffset, samples,
 				     pcm_convert_f_to_s24_lin);
 }
-#endif /* CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_24LE */
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_24LE */
 
-#if CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_S32LE
+#if CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_S32LE
 
 /**
  * \brief HiFi3 enabled PCM conversion from 32 bit to IEEE-754 float.
@@ -875,7 +886,7 @@ static void pcm_convert_f_to_s32_lin(const void *psrc, void *pdst,
 
 		/* shift and round */
 		x = x * ratio;
-		y1 = XT_ROUND_S(x, 15);
+		y1 = _round_s(x);
 
 		/* store one 32 bit sample */
 		AE_S32_L_IP(y1, (ae_int32 *)out, sizeof(*out));
@@ -913,47 +924,47 @@ static int pcm_convert_f_to_s32(const struct audio_stream *source,
 	return pcm_convert_as_linear(source, ioffset, sink, ooffset, samples,
 				     pcm_convert_f_to_s32_lin);
 }
-#endif /* CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_32LE */
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_32LE */
 #endif /* XCHAL_HAVE_FP */
 
 const struct pcm_func_map pcm_func_map[] = {
-#if CONFIG_FORMAT_S16LE
+#if CONFIG_PCM_CONVERTER_FORMAT_S16LE
 	{ SOF_IPC_FRAME_S16_LE, SOF_IPC_FRAME_S16_LE, audio_stream_copy },
-#endif /* CONFIG_FORMAT_S16LE */
-#if CONFIG_FORMAT_S24LE
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_S16LE */
+#if CONFIG_PCM_CONVERTER_FORMAT_S24LE
 	{ SOF_IPC_FRAME_S24_4LE, SOF_IPC_FRAME_S24_4LE, audio_stream_copy },
-#endif /* CONFIG_FORMAT_S24LE */
-#if CONFIG_FORMAT_S24LE && CONFIG_FORMAT_S16LE
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_S24LE */
+#if CONFIG_PCM_CONVERTER_FORMAT_S24LE && CONFIG_PCM_CONVERTER_FORMAT_S16LE
 	{ SOF_IPC_FRAME_S16_LE, SOF_IPC_FRAME_S24_4LE, pcm_convert_s16_to_s24 },
 	{ SOF_IPC_FRAME_S24_4LE, SOF_IPC_FRAME_S16_LE, pcm_convert_s24_to_s16 },
-#endif /* CONFIG_FORMAT_S24LE && CONFIG_FORMAT_S16LE */
-#if CONFIG_FORMAT_S32LE
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_S24LE && CONFIG_PCM_CONVERTER_FORMAT_S16LE */
+#if CONFIG_PCM_CONVERTER_FORMAT_S32LE
 	{ SOF_IPC_FRAME_S32_LE, SOF_IPC_FRAME_S32_LE, audio_stream_copy },
-#endif /* CONFIG_FORMAT_S32LE */
-#if CONFIG_FORMAT_S32LE && CONFIG_FORMAT_S16LE
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_S32LE */
+#if CONFIG_PCM_CONVERTER_FORMAT_S32LE && CONFIG_PCM_CONVERTER_FORMAT_S16LE
 	{ SOF_IPC_FRAME_S16_LE, SOF_IPC_FRAME_S32_LE, pcm_convert_s16_to_s32 },
 	{ SOF_IPC_FRAME_S32_LE, SOF_IPC_FRAME_S16_LE, pcm_convert_s32_to_s16 },
-#endif /* CONFIG_FORMAT_S32LE && CONFIG_FORMAT_S16LE */
-#if CONFIG_FORMAT_S32LE && CONFIG_FORMAT_S24LE
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_S32LE && CONFIG_PCM_CONVERTER_FORMAT_S16LE */
+#if CONFIG_PCM_CONVERTER_FORMAT_S32LE && CONFIG_PCM_CONVERTER_FORMAT_S24LE
 	{ SOF_IPC_FRAME_S24_4LE, SOF_IPC_FRAME_S32_LE, pcm_convert_s24_to_s32 },
 	{ SOF_IPC_FRAME_S32_LE, SOF_IPC_FRAME_S24_4LE, pcm_convert_s32_to_s24 },
-#endif /* CONFIG_FORMAT_S32LE && CONFIG_FORMAT_S24LE */
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_S32LE && CONFIG_PCM_CONVERTER_FORMAT_S24LE */
 #if XCHAL_HAVE_FP
-#if CONFIG_FORMAT_FLOAT
+#if CONFIG_PCM_CONVERTER_FORMAT_FLOAT
 	{ SOF_IPC_FRAME_FLOAT, SOF_IPC_FRAME_FLOAT, audio_stream_copy },
-#endif /* CONFIG_FORMAT_FLOAT */
-#if CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_S16LE
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_FLOAT */
+#if CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_S16LE
 	{ SOF_IPC_FRAME_S16_LE, SOF_IPC_FRAME_FLOAT, pcm_convert_s16_to_f },
 	{ SOF_IPC_FRAME_FLOAT, SOF_IPC_FRAME_S16_LE, pcm_convert_f_to_s16 },
-#endif /* CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_S16LE */
-#if CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_S24LE
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_S16LE */
+#if CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_S24LE
 	{ SOF_IPC_FRAME_S24_4LE, SOF_IPC_FRAME_FLOAT, pcm_convert_s24_to_f },
 	{ SOF_IPC_FRAME_FLOAT, SOF_IPC_FRAME_S24_4LE, pcm_convert_f_to_s24 },
-#endif /* CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_S24LE */
-#if CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_S32LE
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_S24LE */
+#if CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_S32LE
 	{ SOF_IPC_FRAME_S32_LE, SOF_IPC_FRAME_FLOAT, pcm_convert_s32_to_f },
 	{ SOF_IPC_FRAME_FLOAT, SOF_IPC_FRAME_S32_LE, pcm_convert_f_to_s32 },
-#endif /* CONFIG_FORMAT_FLOAT && CONFIG_FORMAT_S32LE */
+#endif /* CONFIG_PCM_CONVERTER_FORMAT_FLOAT && CONFIG_PCM_CONVERTER_FORMAT_S32LE */
 #endif /* XCHAL_HAVE_FP */
 };
 

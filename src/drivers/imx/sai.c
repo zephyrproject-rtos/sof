@@ -33,6 +33,53 @@ static void sai_start(struct dai *dai, int direction)
 
 	uint32_t xcsr = 0U;
 
+	if (direction == DAI_DIR_CAPTURE) {
+		/* Software Reset */
+		dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_CAPTURE),
+				REG_SAI_CSR_SR, REG_SAI_CSR_SR);
+		/* Clear SR bit to finish the reset */
+		dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_CAPTURE),
+				REG_SAI_CSR_SR, 0U);
+		/* Check if the opposite direction is also disabled */
+		xcsr = dai_read(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK));
+		if (!(xcsr & REG_SAI_CSR_FRDE)) {
+			/* Software Reset */
+			dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK),
+					REG_SAI_CSR_SR, REG_SAI_CSR_SR);
+			/* Clear SR bit to finish the reset */
+			dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK),
+					REG_SAI_CSR_SR, 0U);
+			/* Transmitter enable */
+			dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK),
+					REG_SAI_CSR_TERE, REG_SAI_CSR_TERE);
+		}
+	} else {
+		/* Check if the opposite direction is also disabled */
+		xcsr = dai_read(dai, REG_SAI_XCSR(DAI_DIR_CAPTURE));
+		if (!(xcsr & REG_SAI_CSR_FRDE)) {
+			/* Software Reset */
+			dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK),
+					REG_SAI_CSR_SR, REG_SAI_CSR_SR);
+			/* Clear SR bit to finish the reset */
+			dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK),
+					REG_SAI_CSR_SR, 0U);
+		}
+	}
+
+	/* W1C */
+	dai_update_bits(dai, REG_SAI_XCSR(direction),
+			REG_SAI_CSR_FEF, 1);
+	dai_update_bits(dai, REG_SAI_XCSR(direction),
+			REG_SAI_CSR_SEF, 1);
+	dai_update_bits(dai, REG_SAI_XCSR(direction),
+			REG_SAI_CSR_WSF, 1);
+
+	/* add one word to FIFO before TRCE is enabled */
+	if (direction == DAI_DIR_PLAYBACK)
+		dai_write(dai, REG_SAI_TDR0, 0x0);
+	else
+		dai_write(dai, REG_SAI_RDR0, 0x0);
+
 	/* enable DMA requests */
 	dai_update_bits(dai, REG_SAI_XCSR(direction),
 			REG_SAI_CSR_FRDE, REG_SAI_CSR_FRDE);
@@ -41,33 +88,13 @@ static void sai_start(struct dai *dai, int direction)
 			REG_SAI_MCTL_MCLK_EN);
 #endif
 
-	/* add one word to FIFO before TRCE is enabled */
-	if (direction == DAI_DIR_PLAYBACK)
-		dai_write(dai, REG_SAI_TDR0, 0x0);
-	else
-		dai_write(dai, REG_SAI_RDR0, 0x0);
-
-	/* transmitter enable */
-	dai_update_bits(dai, REG_SAI_XCSR(direction),
-			REG_SAI_CSR_TERE, REG_SAI_CSR_TERE);
-	/* TODO: for the time being use half FIFO size as watermark */
-	dai_update_bits(dai, REG_SAI_XCR1(direction),
-			REG_SAI_CR1_RFW_MASK, SAI_FIFO_WORD_SIZE / 2);
+	/* transmit/receive data channel enable */
 	dai_update_bits(dai, REG_SAI_XCR3(direction),
 			REG_SAI_CR3_TRCE_MASK, REG_SAI_CR3_TRCE(1));
 
-	if (direction == DAI_DIR_CAPTURE) {
-		xcsr = dai_read(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK));
-		if (!(xcsr & REG_SAI_CSR_FRDE)) {
-
-			dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK),
-					REG_SAI_CSR_TERE, REG_SAI_CSR_TERE);
-			dai_update_bits(dai, REG_SAI_XCR3(DAI_DIR_PLAYBACK),
-					REG_SAI_CR3_TRCE_MASK,
-					REG_SAI_CR3_TRCE(1));
-		}
-	}
-
+	/* transmitter/receiver enable */
+	dai_update_bits(dai, REG_SAI_XCSR(direction),
+			REG_SAI_CSR_TERE, REG_SAI_CSR_TERE);
 }
 
 static void sai_stop(struct dai *dai, int direction)
@@ -76,32 +103,39 @@ static void sai_stop(struct dai *dai, int direction)
 
 	uint32_t xcsr = 0U;
 
+	/* Disable DMA request */
 	dai_update_bits(dai, REG_SAI_XCSR(direction),
 			REG_SAI_CSR_FRDE, 0);
+
+	/* Transmit/Receive data channel disable */
+	dai_update_bits(dai, REG_SAI_XCR3(direction),
+			REG_SAI_CR3_TRCE_MASK,
+			REG_SAI_CR3_TRCE(0));
+
+	/* Disable interrupts */
 	dai_update_bits(dai, REG_SAI_XCSR(direction),
 			REG_SAI_CSR_XIE_MASK, 0);
 
-	/* Check if the opposite direction is also disabled */
-	xcsr = dai_read(dai, REG_SAI_XCSR(!direction));
-	if (!(xcsr & REG_SAI_CSR_FRDE)) {
-		/* Disable both directions and reset their FIFOs */
-		dai_update_bits(dai, REG_SAI_TCSR, REG_SAI_CSR_TERE, 0);
-		poll_for_register_delay(dai_base(dai) + REG_SAI_TCSR,
+	/* Disable transmitter/receiver */
+	if (direction == DAI_DIR_CAPTURE) {
+		dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_CAPTURE), REG_SAI_CSR_TERE, 0);
+		poll_for_register_delay(dai_base(dai) + REG_SAI_XCSR(DAI_DIR_CAPTURE),
 					REG_SAI_CSR_TERE, 0, 100);
-
-		dai_update_bits(dai, REG_SAI_RCSR, REG_SAI_CSR_TERE, 0);
-		poll_for_register_delay(dai_base(dai) + REG_SAI_RCSR,
-					REG_SAI_CSR_TERE, 0, 100);
-
-		/* Software Reset for both Tx and Rx */
-		dai_update_bits(dai, REG_SAI_TCSR, REG_SAI_CSR_SR,
-				REG_SAI_CSR_SR);
-		dai_update_bits(dai, REG_SAI_RCSR, REG_SAI_CSR_SR,
-				REG_SAI_CSR_SR);
-
-		/* Clear SR bit to finish the reset */
-		dai_update_bits(dai, REG_SAI_TCSR, REG_SAI_CSR_SR, 0U);
-		dai_update_bits(dai, REG_SAI_RCSR, REG_SAI_CSR_SR, 0U);
+		/* Check if the opposite direction is also disabled */
+		xcsr = dai_read(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK));
+		if (!(xcsr & REG_SAI_CSR_FRDE)) {
+			dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK), REG_SAI_CSR_TERE, 0);
+			poll_for_register_delay(dai_base(dai) + REG_SAI_XCSR(DAI_DIR_PLAYBACK),
+						REG_SAI_CSR_TERE, 0, 100);
+		}
+	} else {
+		/* Check if the opposite direction is also disabled */
+		xcsr = dai_read(dai, REG_SAI_XCSR(DAI_DIR_CAPTURE));
+		if (!(xcsr & REG_SAI_CSR_FRDE)) {
+			dai_update_bits(dai, REG_SAI_XCSR(DAI_DIR_PLAYBACK), REG_SAI_CSR_TERE, 0);
+			poll_for_register_delay(dai_base(dai) + REG_SAI_XCSR(DAI_DIR_PLAYBACK),
+						REG_SAI_CSR_TERE, 0, 100);
+		}
 	}
 }
 
@@ -251,10 +285,12 @@ static inline int sai_set_config(struct dai *dai,
 			REG_SAI_CR4_FRSZ_MASK | REG_SAI_CR4_SYWD_MASK |
 			REG_SAI_CR4_CHMOD_MASK;
 
-
 	mask_cr5  = REG_SAI_CR5_WNW_MASK | REG_SAI_CR5_W0W_MASK |
 			REG_SAI_CR5_FBT_MASK;
 
+	/* TODO: for the time being use half FIFO size as watermark */
+	dai_update_bits(dai, REG_SAI_XCR1(REG_TX_DIR),
+			REG_SAI_CR1_RFW_MASK, SAI_FIFO_WORD_SIZE / 2);
 	dai_update_bits(dai, REG_SAI_XCR2(REG_TX_DIR), mask_cr2, val_cr2);
 	dai_update_bits(dai, REG_SAI_XCR4(REG_TX_DIR), mask_cr4, val_cr4);
 	dai_update_bits(dai, REG_SAI_XCR5(REG_TX_DIR), mask_cr5, val_cr5);
@@ -264,6 +300,10 @@ static inline int sai_set_config(struct dai *dai,
 
 	val_cr2 |= REG_SAI_CR2_SYNC;
 	mask_cr2 |= REG_SAI_CR2_SYNC_MASK;
+
+	/* TODO: for the time being use half FIFO size as watermark */
+	dai_update_bits(dai, REG_SAI_XCR1(REG_RX_DIR),
+			REG_SAI_CR1_RFW_MASK, SAI_FIFO_WORD_SIZE / 2);
 	dai_update_bits(dai, REG_SAI_XCR2(REG_RX_DIR), mask_cr2, val_cr2);
 	dai_update_bits(dai, REG_SAI_XCR4(REG_RX_DIR), mask_cr4, val_cr4);
 	dai_update_bits(dai, REG_SAI_XCR5(REG_RX_DIR), mask_cr5, val_cr5);

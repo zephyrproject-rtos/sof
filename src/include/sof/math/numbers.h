@@ -12,27 +12,14 @@
 
 #include <stdint.h>
 
-/* Zephyr defines this - remove local copy once Zephyr integration complete */
-#ifdef MIN
-#undef MIN
-#endif
+#ifndef __ZEPHYR__
+/* Unsafe and portable macros for consistency with Zephyr.
+ * See SEI CERT-C PRE31-C
+ */
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MAX(a, b) ((a) < (b) ? (b) : (a))
+#endif /* ! __ZEPHYR__ */
 
-#define MIN(a, b) ({		\
-	typeof(a) __a = (a);	\
-	typeof(b) __b = (b);	\
-	__a > __b ? __b : __a;	\
-})
-
-/* Zephyr defines this - remove local copy once Zephyr integration complete */
-#ifdef MAX
-#undef MAX
-#endif
-
-#define MAX(a, b) ({		\
-	typeof(a) __a = (a);	\
-	typeof(b) __b = (b);	\
-	__a < __b ? __b : __a;	\
-})
 #define ABS(a) ({		\
 	typeof(a) __a = (a);	\
 	__a < 0 ? -__a : __a;	\

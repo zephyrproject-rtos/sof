@@ -29,6 +29,9 @@ ifdef(`HSEARPROC', , `define(HSEARPROC, volume)')
 ifdef(`DMICPROC', , `define(DMICPROC, passthrough)')
 ifdef(`DMIC16KPROC', , `define(DMIC16KPROC, passthrough)')
 
+# FIXME: Using DMIC16kHz instead of DMIC16k, otherwise M4 does not return.
+define(DMIC_16k_PCM_NAME, DMIC16kHz)
+
 #
 # Define the pipelines
 #
@@ -211,13 +214,13 @@ DAI_CONFIG(SSP, SSP_INDEX, 0, SSP_NAME,
 
 # dmic01 (ID: 1)
 DAI_CONFIG(DMIC, 0, 1, dmic01,
-	   DMIC_CONFIG(1, 500000, 4800000, 40, 60, 48000,
+	   DMIC_CONFIG(1, 2400000, 4800000, 40, 60, 48000,
 		DMIC_WORD_LENGTH(s32le), 400, DMIC, 0,
 		PDM_CONFIG(DMIC, 0, FOUR_CH_PDM0_PDM1)))
 
 # dmic16k (ID: 2)
 DAI_CONFIG(DMIC, 1, 2, dmic16k,
-	   DMIC_CONFIG(1, 500000, 4800000, 40, 60, 16000,
+	   DMIC_CONFIG(1, 2400000, 4800000, 40, 60, 16000,
 		DMIC_WORD_LENGTH(s32le), 400, DMIC, 1,
 		PDM_CONFIG(DMIC, 1, STEREO_PDM0)))
 

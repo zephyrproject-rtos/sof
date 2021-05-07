@@ -14,9 +14,22 @@ BUILD_JOBS=$(nproc --all)
 BUILD_VERBOSE=
 PLATFORMS=()
 
-PATH=$pwd/local/bin:$PATH
+SOF_TOP=$(cd "$(dirname "$0")/.." && pwd)
 
-pwd=$(pwd)
+# As CMake forks one compiler process for each source file, the XTensa
+# compiler spends much more time idle waiting for the license server
+# over the network than actually using CPU or disk. A factor 3 has been
+# found optimal for 16 nproc 25ms away from the server; your mileage may
+# vary.
+#
+# The entire, purely local gcc build is so fast (~ 1s) that observing
+# any difference between -j nproc and -j nproc*N is practically
+# impossible so let's not waste RAM when building with gcc.
+
+if [ -n "$XTENSA_TOOLS_ROOT" ]; then
+    BUILD_JOBS=$((BUILD_JOBS * 3))
+fi
+
 
 die()
 {
@@ -31,7 +44,7 @@ print_usage()
 {
     cat <<EOF
 Re-configures and re-builds SOF using the corresponding compiler and
-platform's _defconfig file.
+the <platform>_defconfig file.
 
 usage: $0 [options] platform(s)
 
@@ -40,15 +53,16 @@ usage: $0 [options] platform(s)
        -u Force UP ARCH
        -d Enable debug build
        -c Interactive menuconfig
-       -o copies the file argument from src/arch/xtensa/configs/override/$arg.config
+       -o arg, copies src/arch/xtensa/configs/override/<arg>.config
 	  to the build directory after invoking CMake and before Make.
        -k Configure rimage to use a non-default \${RIMAGE_PRIVATE_KEY}
            DEPRECATED: use the more flexible \${PRIVATE_KEY_OPTION} below.
        -v Verbose Makefile log
        -j n Set number of make build jobs. Jobs=#cores when no flag. \
 Infinte when not specified.
-	-m path to MEU tool. Switches signing step to use MEU instead of rimage.
-           To use a non-default key define PRIVATE_KEY_OPTION, see below.
+       -m path to MEU tool. CMake disables rimage signing which produces a
+          .uns[igned] file signed by MEU. For a non-default key use the
+          PRIVATE_KEY_OPTION, see below.
 
 To use a non-default key you must define the right CMake parameter in the
 following environment variable:
@@ -56,6 +70,25 @@ following environment variable:
      PRIVATE_KEY_OPTION='-DMEU_PRIVATE_KEY=path/to/key'  $0  -m /path/to/meu ...
 or:
      PRIVATE_KEY_OPTION='-DRIMAGE_PRIVATE_KEY=path/to/key'  $0 ...
+
+This script supports XtensaTools but only when installed in a specific
+directory structure, example:
+
+myXtensa/
+└── install/
+    ├── builds/
+    │   ├── RD-2012.5-linux/
+    │   │   └── Intel_HiFiEP/
+    │   └── RG-2017.8-linux/
+    │       ├── LX4_langwell_audio_17_8/
+    │       └── X4H3I16w2D48w3a_2017_8/
+    └── tools/
+        ├── RD-2012.5-linux/
+        │   └── XtensaTools/
+        └── RG-2017.8-linux/
+            └── XtensaTools/
+
+$ XTENSA_TOOLS_ROOT=/path/to/myXtensa $0 ...
 
 Supported platforms ${SUPPORTED_PLATFORMS[*]}
 
@@ -85,7 +118,7 @@ SIGNING_TOOL=RIMAGE
 
 if [ -n "${OVERRIDE_CONFIG}" ]
 then
-	OVERRIDE_CONFIG="src/arch/xtensa/configs/override/$OVERRIDE_CONFIG.config"
+	OVERRIDE_CONFIG="${SOF_TOP}/src/arch/xtensa/configs/override/$OVERRIDE_CONFIG.config"
 	[ -f "${OVERRIDE_CONFIG}" ] || die 'Invalid override config file %s\n' "${OVERRIDE_CONFIG}"
 fi
 
@@ -136,7 +169,7 @@ then
 fi
 
 OLDPATH=$PATH
-WORKDIR="$pwd"
+CURDIR="$(pwd)"
 
 # build platforms
 for platform in "${PLATFORMS[@]}"
@@ -147,39 +180,34 @@ do
 	case $platform in
 		byt)
 			PLATFORM="baytrail"
-			ARCH="xtensa"
 			XTENSA_CORE="Intel_HiFiEP"
 			HOST="xtensa-byt-elf"
 			XTENSA_TOOLS_VERSION="RD-2012.5-linux"
 			;;
 		cht)
 			PLATFORM="cherrytrail"
-			ARCH="xtensa"
 			XTENSA_CORE="CHT_audio_hifiep"
 			HOST="xtensa-byt-elf"
 			XTENSA_TOOLS_VERSION="RD-2012.5-linux"
 			;;
 		bdw)
 			PLATFORM="broadwell"
-			ARCH="xtensa"
 			XTENSA_CORE="LX4_langwell_audio_17_8"
 			HOST="xtensa-hsw-elf"
 			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
 			;;
 		hsw)
 			PLATFORM="haswell"
-			ARCH="xtensa"
 			XTENSA_CORE="LX4_langwell_audio_17_8"
 			HOST="xtensa-hsw-elf"
 			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
 			;;
 		apl)
 			PLATFORM="apollolake"
-			ARCH="xtensa-smp"
 			XTENSA_CORE="X4H3I16w2D48w3a_2017_8"
 
-			# test APL compiler aliases and ignore set -e here
-			if type xtensa-bxt-elf-gcc; then
+			# test APL compiler aliases
+			if command -v xtensa-bxt-elf-gcc; then
 				HOST="xtensa-bxt-elf"
 			else
 				HOST="xtensa-apl-elf"
@@ -190,11 +218,10 @@ do
 			;;
 		skl)
 			PLATFORM="skylake"
-			ARCH="xtensa"
 			XTENSA_CORE="X4H3I16w2D48w3a_2017_8"
 
-			# test APL compiler aliases and ignore set -e here
-			if type xtensa-bxt-elf-gcc; then
+			# test APL compiler aliases
+			if command -v xtensa-bxt-elf-gcc; then
 				HOST="xtensa-bxt-elf"
 			else
 				HOST="xtensa-apl-elf"
@@ -205,11 +232,10 @@ do
 			;;
 		kbl)
 			PLATFORM="kabylake"
-			ARCH="xtensa"
 			XTENSA_CORE="X4H3I16w2D48w3a_2017_8"
 
-			# test APL compiler aliases and ignore set -e here
-			if type xtensa-bxt-elf-gcc; then
+			# test APL compiler aliases
+			if command -v xtensa-bxt-elf-gcc; then
 				HOST="xtensa-bxt-elf"
 			else
 				HOST="xtensa-apl-elf"
@@ -220,7 +246,6 @@ do
 			;;
 		cnl)
 			PLATFORM="cannonlake"
-			ARCH="xtensa-smp"
 			XTENSA_CORE="X6H3CNL_2017_8"
 			HOST="xtensa-cnl-elf"
 			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
@@ -228,7 +253,6 @@ do
 			;;
 		sue)
 			PLATFORM="suecreek"
-			ARCH="xtensa"
 			XTENSA_CORE="X6H3CNL_2017_8"
 			HOST="xtensa-cnl-elf"
 			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
@@ -236,7 +260,6 @@ do
 			;;
 		icl)
 			PLATFORM="icelake"
-			ARCH="xtensa-smp"
 			XTENSA_CORE="X6H3CNL_2017_8"
 			HOST="xtensa-cnl-elf"
 			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
@@ -244,7 +267,6 @@ do
 			;;
 		tgl)
 			PLATFORM="tgplp"
-			ARCH="xtensa-smp"
 			XTENSA_CORE="cavs2x_LX6HiFi3_2017_8"
 			HOST="xtensa-cnl-elf"
 			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
@@ -252,12 +274,11 @@ do
 			# default key for TGL
 			if [ -z "$PRIVATE_KEY_OPTION" ]
 			then
-				PRIVATE_KEY_OPTION="-D${SIGNING_TOOL}_PRIVATE_KEY=$pwd/keys/otc_private_key_3k.pem"
+	PRIVATE_KEY_OPTION="-D${SIGNING_TOOL}_PRIVATE_KEY=$SOF_TOP/keys/otc_private_key_3k.pem"
 			fi
 			;;
 		tgl-h)
 			PLATFORM="tgph"
-			ARCH="xtensa-smp"
 			XTENSA_CORE="cavs2x_LX6HiFi3_2017_8"
 			HOST="xtensa-cnl-elf"
 			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
@@ -265,12 +286,11 @@ do
 			# default key for TGL
 			if [ -z "$PRIVATE_KEY_OPTION" ]
 			then
-				PRIVATE_KEY_OPTION="-D${SIGNING_TOOL}_PRIVATE_KEY=$pwd/keys/otc_private_key_3k.pem"
+	PRIVATE_KEY_OPTION="-D${SIGNING_TOOL}_PRIVATE_KEY=$SOF_TOP/keys/otc_private_key_3k.pem"
 			fi
 			;;
 		jsl)
 			PLATFORM="jasperlake"
-			ARCH="xtensa-smp"
 			XTENSA_CORE="X6H3CNL_2017_8"
 			HOST="xtensa-cnl-elf"
 			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
@@ -278,28 +298,24 @@ do
 			;;
 		imx8)
 			PLATFORM="imx8"
-			ARCH="xtensa"
-			XTENSA_CORE="hifi4_nxp_v3_3_1_2_dev"
+			XTENSA_CORE="hifi4_nxp_v3_3_1_2_2017"
 			HOST="xtensa-imx-elf"
-			XTENSA_TOOLS_VERSION="RF-2016.4-linux"
+			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
 			;;
 		imx8x)
 			PLATFORM="imx8x"
-			ARCH="xtensa"
-			XTENSA_CORE="hifi4_nxp_v3_3_1_2_dev"
+			XTENSA_CORE="hifi4_nxp_v3_3_1_2_2017"
 			HOST="xtensa-imx-elf"
-			XTENSA_TOOLS_VERSION="RF-2016.4-linux"
+			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
 			;;
 		imx8m)
 			PLATFORM="imx8m"
-			ARCH="xtensa"
-			XTENSA_CORE="hifi4_mscale_v0_0_2_prod"
+			XTENSA_CORE="hifi4_mscale_v0_0_2_2017"
 			HOST="xtensa-imx8m-elf"
-			XTENSA_TOOLS_VERSION="RF-2016.4-linux"
+			XTENSA_TOOLS_VERSION="RG-2017.8-linux"
 			;;
 
 	esac
-	ROOT="$pwd/../xtensa-root/$HOST"
 
 	if [ -n "$XTENSA_TOOLS_ROOT" ]
 	then
@@ -310,27 +326,28 @@ do
 		if [ -d "$XTENSA_TOOLS_DIR" ]
 			then
 				XCC="xt-xcc"
-				XTOBJCOPY="xt-objcopy"
-				XTOBJDUMP="xt-objdump"
 			else
 				XCC="none"
-				XTOBJCOPY="none"
-				XTOBJDUMP="none"
-				echo "XTENSA_TOOLS_DIR is not a directory"
+				>&2 printf 'WARNING: %s
+\t is not a directory, reverting to gcc\n' "$XTENSA_TOOLS_DIR"
 		fi
 	fi
 
-	# update ROOT directory for xt-xcc
+	# CMake uses ROOT_DIR for includes and libraries a bit like
+	# --sysroot would.
+	ROOT="$SOF_TOP/../xtensa-root/$HOST"
+
 	if [ "$XCC" == "xt-xcc" ]
 	then
 		TOOLCHAIN=xt
 		ROOT="$XTENSA_BUILDS_DIR/$XTENSA_CORE/xtensa-elf"
 		export XTENSA_SYSTEM=$XTENSA_BUILDS_DIR/$XTENSA_CORE/config
+		printf 'XTENSA_SYSTEM=%s\n' "${XTENSA_SYSTEM}"
 		PATH=$XTENSA_TOOLS_DIR/XtensaTools/bin:$OLDPATH
 		COMPILER="xcc"
 	else
 		TOOLCHAIN=$HOST
-		PATH=$pwd/../$HOST/bin:$OLDPATH
+		PATH=$SOF_TOP/../$HOST/bin:$OLDPATH
 		COMPILER="gcc"
 
 		case "$platform" in
@@ -347,20 +364,20 @@ do
 	mkdir "$BUILD_DIR"
 	cd "$BUILD_DIR"
 
+	printf 'PATH=%s\n' "$PATH"
 	( set -x # log the main commands and their parameters
 	cmake -DTOOLCHAIN="$TOOLCHAIN" \
 		-DROOT_DIR="$ROOT" \
 		-DMEU_OPENSSL="${MEU_OPENSSL}" \
 		"${MEU_PATH_OPTION}" \
 		"${PRIVATE_KEY_OPTION}" \
-		..
-
-	cmake --build .  --  ${PLATFORM}${DEFCONFIG_PATCH}_defconfig
+		-DINIT_CONFIG=${PLATFORM}${DEFCONFIG_PATCH}_defconfig \
+		"$SOF_TOP"
 	)
 
 	if [ -n "$OVERRIDE_CONFIG" ]
 	then
-		cp "../$OVERRIDE_CONFIG" override.config
+		cp "$OVERRIDE_CONFIG" override.config
 	fi
 
 	if [[ "x$MAKE_MENUCONFIG" == "xyes" ]]
@@ -392,7 +409,7 @@ do
 
 	cmake --build .  --  bin -j "${BUILD_JOBS}" ${BUILD_VERBOSE}
 
-	cd "$WORKDIR"
+	cd "$CURDIR"
 done # for platform in ...
 
 # list all the images

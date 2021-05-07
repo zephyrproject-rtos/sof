@@ -24,7 +24,7 @@ struct edf_schedule_data {
 	uint32_t clock;
 };
 
-struct scheduler_ops schedule_edf_ops;
+static struct scheduler_ops schedule_edf_ops;
 
 static struct edf_schedule_data *sch;
 
@@ -40,9 +40,9 @@ static int schedule_edf_task_complete(struct task *task)
 static int schedule_edf_task(void *data, struct task *task, uint64_t start,
 			      uint64_t period)
 {
-	struct edf_schedule_data *sch = data;
+	struct edf_schedule_data *sched = data;
 	(void)period;
-	list_item_prepend(&task->list, &sch->list);
+	list_item_prepend(&task->list, &sched->list);
 	task->state = SOF_TASK_STATE_QUEUED;
 
 	if (task->ops.run)
@@ -90,11 +90,6 @@ static void edf_scheduler_free(void *data)
 	free(data);
 }
 
-/* The following definitions are to satisfy libsof linker errors */
-static void schedule_edf(void *data)
-{
-}
-
 static int schedule_edf_task_cancel(void *data, struct task *task)
 {
 	if (task->state == SOF_TASK_STATE_QUEUED) {
@@ -118,7 +113,7 @@ static int schedule_edf_task_free(void *data, struct task *task)
 	return 0;
 }
 
-struct scheduler_ops schedule_edf_ops = {
+static struct scheduler_ops schedule_edf_ops = {
 	.schedule_task		= schedule_edf_task,
 	.schedule_task_running	= NULL,
 	.schedule_task_complete = NULL,
@@ -126,5 +121,4 @@ struct scheduler_ops schedule_edf_ops = {
 	.schedule_task_cancel	= schedule_edf_task_cancel,
 	.schedule_task_free	= schedule_edf_task_free,
 	.scheduler_free		= edf_scheduler_free,
-	.scheduler_run		= schedule_edf
 };

@@ -31,6 +31,9 @@ struct sof;
 #define SOF_TASK_DEADLINE_ALMOST_IDLE	(SOF_TASK_DEADLINE_IDLE - 1)
 #define SOF_TASK_DEADLINE_NOW		0
 
+/** \brief Task counter initial value. */
+#define SOF_TASK_SKIP_COUNT		0xFFFFu
+
 /** \brief Task states. */
 enum task_state {
 	SOF_TASK_STATE_INIT = 0,
@@ -65,7 +68,7 @@ struct task {
 	void *priv_data;	/**< task private data */
 	struct task_ops ops;	/**< task operations */
 #ifdef __ZEPHYR__
-	struct k_delayed_work z_delayed_work;
+	struct k_work_delayable z_delayed_work;
 #endif
 };
 
@@ -76,7 +79,7 @@ struct pipeline_task {
 	struct comp_dev *sched_comp;	/**< pipeline scheduling component */
 };
 
-#define pipeline_task_get(task) ((struct pipeline_task *)(task))
+#define pipeline_task_get(t) container_of(t, struct pipeline_task, task)
 
 static inline enum task_state task_run(struct task *task)
 {

@@ -51,7 +51,7 @@ C_CONTROLMIXER(KWD Capture Volume, PIPELINE_ID,
 	false,
 	CONTROLMIXER_TLV(TLV 80 steps from -50dB to +30dB for 1dB, vtlv_m50s1),
 	Channel register and shift for Front Left/Right,
-	LIST(`	', KCONTROL_CHANNEL(FL, 1, 0), KCONTROL_CHANNEL(FR, 1, 1)))
+	VOLUME_CHANNEL_MAP)
 
 #
 # Volume configuration
@@ -118,7 +118,7 @@ indir(`define', concat(`PIPELINE_PCM_', PIPELINE_ID), N_PCMC(PCM_ID))
 # PCM Configuration
 #
 dnl PCM_CAPTURE_LP_ADD(name, pipeline, capture)
-PCM_CAPTURE_LP_ADD(DMIC16k, PCM_ID, N_STS(PCM_ID))
+PCM_CAPTURE_LP_ADD(DMIC_16k_PCM_NAME, PCM_ID, N_STS(PCM_ID))
 
 PCM_CAPABILITIES(N_STS(PCM_ID), CAPABILITY_FORMAT_NAME(PIPELINE_FORMAT), 16000, 16000, 2, PIPELINE_CHANNELS, 2, 160, 192, 256000, 256000, 1280000)
 

@@ -3,6 +3,7 @@
 if(CONFIG_SOF)
 
 if(CONFIG_LIBRARY)
+	set(PLATFORM "library")
 	set(ARCH host)
 	zephyr_include_directories(../src/platform/library/include)
 else()
@@ -53,7 +54,7 @@ set(SOF_TRACE_PATH "${SOF_SRC_PATH}/trace")
 
 # Save path to rimage configuration files in cmake cache for later use by
 # rimage during the "west sign" stage
-get_filename_component(RIMAGE_CONFIG "ext/rimage/config" ABSOLUTE)
+get_filename_component(RIMAGE_CONFIG "../rimage/config" ABSOLUTE)
 set(RIMAGE_CONFIG_PATH ${RIMAGE_CONFIG} CACHE PATH
     " Path to rimage board configuration files")
 
@@ -113,10 +114,6 @@ if (CONFIG_SOC_SERIES_INTEL_CAVS_V15)
 		${SOF_DRIVERS_PATH}/intel/cavs/timestamp.c
 	)
 
-	zephyr_library_sources_ifdef(CONFIG_MULTICORE
-		${SOF_DRIVERS_PATH}/intel/cavs/idc.c
-	)
-
 	zephyr_library_sources_ifdef(CONFIG_INTEL_HDA
 		${SOF_DRIVERS_PATH}/intel/hda/hda-dma.c
 		${SOF_DRIVERS_PATH}/intel/hda/hda.c
@@ -164,10 +161,6 @@ if (CONFIG_SOC_SERIES_INTEL_CAVS_V18)
 	zephyr_library_sources(
 		${SOF_DRIVERS_PATH}/intel/cavs/ipc.c
 		${SOF_DRIVERS_PATH}/intel/cavs/timestamp.c
-	)
-
-	zephyr_library_sources_ifdef(CONFIG_MULTICORE
-		${SOF_DRIVERS_PATH}/intel/cavs/idc.c
 	)
 
 	# Sue Creek - S100 only - already in Zephyr.
@@ -229,10 +222,6 @@ if (CONFIG_SOC_SERIES_INTEL_CAVS_V20)
 		${SOF_DRIVERS_PATH}/intel/cavs/timestamp.c
 	)
 
-	zephyr_library_sources_ifdef(CONFIG_MULTICORE
-		${SOF_DRIVERS_PATH}/intel/cavs/idc.c
-	)
-
 	zephyr_library_sources_ifdef(CONFIG_INTEL_HDA
 		${SOF_DRIVERS_PATH}/intel/hda/hda-dma.c
 		${SOF_DRIVERS_PATH}/intel/hda/hda.c
@@ -288,10 +277,6 @@ if (CONFIG_SOC_SERIES_INTEL_CAVS_V25)
 	zephyr_library_sources(
 		${SOF_DRIVERS_PATH}/intel/cavs/ipc.c
 		${SOF_DRIVERS_PATH}/intel/cavs/timestamp.c
-	)
-
-	zephyr_library_sources_ifdef(CONFIG_MULTICORE
-		${SOF_DRIVERS_PATH}/intel/cavs/idc.c
 	)
 
 	zephyr_library_sources_ifdef(CONFIG_INTEL_HDA
@@ -366,8 +351,9 @@ zephyr_include_directories(${SOF_PLATFORM_PATH}/${PLATFORM}/include)
 # Commented files will be added/removed as integration dictates.
 zephyr_library_sources(
 	${SOF_IPC_PATH}/dma-copy.c
-	${SOF_IPC_PATH}/ipc.c
-	${SOF_IPC_PATH}/handler.c
+	${SOF_IPC_PATH}/ipc-common.c
+	${SOF_IPC_PATH}/handler-ipc3.c
+	${SOF_IPC_PATH}/helper-ipc3.c
 	${SOF_IPC_PATH}/ipc-host-ptable.c
 	${SOF_SRC_PATH}/spinlock.c
 
@@ -386,14 +372,17 @@ zephyr_library_sources(
 	${SOF_LIB_PATH}/dai.c
 
 	# SOF mandatory audio processing
-	${SOF_AUDIO_PATH}/pipeline_static.c
 	${SOF_AUDIO_PATH}/channel_map.c
 	${SOF_AUDIO_PATH}/pcm_converter/pcm_converter_hifi3.c
 	${SOF_AUDIO_PATH}/pcm_converter/pcm_converter.c
 	${SOF_AUDIO_PATH}/pcm_converter/pcm_converter_generic.c
 	${SOF_AUDIO_PATH}/buffer.c
 	${SOF_AUDIO_PATH}/component.c
-	${SOF_AUDIO_PATH}/pipeline.c
+	${SOF_AUDIO_PATH}/pipeline/pipeline-graph.c
+	${SOF_AUDIO_PATH}/pipeline/pipeline-params.c
+	${SOF_AUDIO_PATH}/pipeline/pipeline-schedule.c
+	${SOF_AUDIO_PATH}/pipeline/pipeline-stream.c
+	${SOF_AUDIO_PATH}/pipeline/pipeline-xrun.c
 	${SOF_AUDIO_PATH}/host.c
 
 	# SOF core infrastructure - runs on top of Zephyr
@@ -404,6 +393,7 @@ zephyr_library_sources(
 	${SOF_SRC_PATH}/schedule/dma_single_chan_domain.c
 	${SOF_SRC_PATH}/schedule/dma_multi_chan_domain.c
 	${SOF_SRC_PATH}/schedule/ll_schedule.c
+	${SOF_SRC_PATH}/schedule/zephyr.c
 
 	# Bridge wrapper between SOF and Zephyr APIs - Will shrink over time.
 	wrapper.c
@@ -487,6 +477,10 @@ zephyr_library_sources_ifdef(CONFIG_COMP_SRC
 	${SOF_AUDIO_PATH}/src/src_generic.c
 	${SOF_AUDIO_PATH}/src/src_hifi3.c
 	${SOF_AUDIO_PATH}/src/src.c
+)
+
+zephyr_library_sources_ifdef(CONFIG_SAMPLE_SMART_AMP
+	${SOF_SAMPLES_PATH}/audio/smart_amp_test.c
 )
 
 zephyr_library_sources_ifdef(CONFIG_COMP_MUX

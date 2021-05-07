@@ -5,7 +5,7 @@
 // Author: Liam Girdwood <liam.r.girdwood@linux.intel.com>
 //         Keyon Jie <yang.jie@linux.intel.com>
 
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
 #include <sof/lib/dma.h>
 #include <sof/lib/uuid.h>
 #include <sof/platform.h>
@@ -73,7 +73,7 @@ int dma_copy_to_host_nowait(struct dma_copy *dc, struct dma_sg_config *host_sg,
 	return size;
 }
 
-#else
+#else /* CONFIG_DMA_GW */
 
 int dma_copy_to_host_nowait(struct dma_copy *dc, struct dma_sg_config *host_sg,
 			    int32_t host_offset, void *local_ptr, int32_t size)
@@ -124,13 +124,11 @@ int dma_copy_to_host_nowait(struct dma_copy *dc, struct dma_sg_config *host_sg,
 
 	ipc_msg_send(dmat->msg, &dmat->posn, false);
 
-	platform_shared_commit(dmat, sizeof(*dmat));
-
 	/* bytes copied */
 	return local_sg_elem.size;
 }
 
-#endif
+#endif /* CONFIG_DMA_GW */
 
 int dma_copy_new(struct dma_copy *dc)
 {

@@ -124,13 +124,13 @@ extern struct tr_ctx sl_tr;
 		tr_info(&sl_tr, "line: %d", line); \
 	} while (0)
 
-#else
+#else  /* CONFIG_DEBUG_LOCKS_VERBOSE */
 #define spin_lock_log(lock, line) do {} while (0)
 #define spin_lock_dbg(line) do {} while (0)
 #define spin_unlock_dbg(line) do {} while (0)
-#endif
+#endif /* CONFIG_DEBUG_LOCKS_VERBOSE */
 
-#else
+#else  /* CONFIG_DEBUG_LOCKS */
 
 #define trace_lock(__e) do {} while (0)
 #define tracev_lock(__e) do {} while (0)
@@ -138,7 +138,7 @@ extern struct tr_ctx sl_tr;
 #define spin_lock_dbg(line) do {} while (0)
 #define spin_unlock_dbg(line) do {} while (0)
 
-#endif
+#endif /* CONFIG_DEBUG_LOCKS */
 
 static inline int _spin_try_lock(spinlock_t *lock, int line)
 {
@@ -171,7 +171,6 @@ static inline void _spin_lock(spinlock_t *lock, int line)
 #endif
 
 	/* spinlock has to be in a shared memory */
-	platform_shared_commit(lock, sizeof(*lock));
 }
 
 #define spin_lock(lock) _spin_lock(lock, __LINE__)
@@ -189,7 +188,6 @@ static inline void _spin_unlock(spinlock_t *lock, int line)
 #endif
 
 	/* spinlock has to be in a shared memory */
-	platform_shared_commit(lock, sizeof(*lock));
 }
 
 #define spin_unlock(lock) _spin_unlock(lock, __LINE__)

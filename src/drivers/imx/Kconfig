@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: BSD-3-Clause
+
+config IMX_EDMA
+	bool "i.MX EDMA driver"
+	default n
+	depends on IMX
+	help
+	  Select this to enable support for i.MX EDMA DMA controller.
+
+config IMX_INTERRUPT_IRQSTEER
+	bool
+	default n
+	help
+	  This has to be selected for i.MX NXP platform that have irqsteer.
+	  It enables NXP platforms-specific features.

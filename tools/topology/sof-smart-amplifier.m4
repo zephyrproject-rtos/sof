@@ -28,20 +28,20 @@ ifelse(SDW, `1',
 `
 # ALH related
 # define(`SMART_ALH_INDEX', 1) define smart amplifier ALH index
-ifdef(`SMART_ALH_INDEX',`',`errprint(note: Need to define ALH index for sof-smart-amplifier
+ifdef(`SMART_ALH_INDEX',`',`fatal_error(note: Need to define ALH index for sof-smart-amplifier
 )')
-ifdef(`SMART_ALH_PLAYBACK_NAME',`',`errprint(note: Need to define ALH BE dai_link name for sof-smart-amplifier
+ifdef(`SMART_ALH_PLAYBACK_NAME',`',`fatal_error(note: Need to define ALH BE dai_link name for sof-smart-amplifier
 )')
-ifdef(`SMART_ALH_CAPTURE_NAME',`',`errprint(note: Need to define ALH BE dai_link name for sof-smart-amplifier
+ifdef(`SMART_ALH_CAPTURE_NAME',`',`fatal_error(note: Need to define ALH BE dai_link name for sof-smart-amplifier
 )')
 ',
 `
 # SSP related
 # define(`SMART_SSP_INDEX', 1) define smart amplifier SSP index
-ifdef(`SMART_SSP_INDEX',`',`errprint(note: Need to define SSP index for sof-smart-amplifier
+ifdef(`SMART_SSP_INDEX',`',`fatal_error(note: Need to define SSP index for sof-smart-amplifier
 )')
 # define(`SMART_SSP_NAME', `SSP1-Codec') define SSP BE dai_link name
-ifdef(`SMART_SSP_NAME',`',`errprint(note: Need to define SSP BE dai_link name for sof-smart-amplifier
+ifdef(`SMART_SSP_NAME',`',`fatal_error(note: Need to define SSP BE dai_link name for sof-smart-amplifier
 )')
 # define(`SMART_SSP_QUIRK', 0) define SSP quirk for special use, e.g. set SSP_QUIRK_LBM to verify
 # smart_amp nocodec mode. Set it to 0 by default for normal mode.
@@ -51,43 +51,47 @@ ifdef(`SSP_MCLK',`',`define(`SSP_MCLK', 19200000)')
 ')
 
 # define(`SMART_BE_ID', 7) define BE dai_link ID
-ifdef(`SMART_BE_ID',`',`errprint(note: Need to define SSP BE dai_link ID for sof-smart-amplifier
+ifdef(`SMART_BE_ID',`',`fatal_error(note: Need to define SSP BE dai_link ID for sof-smart-amplifier
 )')
 # Playback related
 # define(`SMART_PB_PPL_ID', 1)
-ifdef(`SMART_PB_PPL_ID',`',`errprint(note: Need to define playback pipeline ID for sof-smart-amplifier
+ifdef(`SMART_PB_PPL_ID',`',`fatal_error(note: Need to define playback pipeline ID for sof-smart-amplifier
 )')
 # define(`SMART_PB_CH_NUM', 2)
-ifdef(`SMART_PB_CH_NUM',`',`errprint(note: Need to define playback channel number for sof-smart-amplifier
+ifdef(`SMART_PB_CH_NUM',`',`fatal_error(note: Need to define playback channel number for sof-smart-amplifier
 )')
 define(`SMART_PIPE_SOURCE', concat(`PIPELINE_SOURCE_', SMART_PB_PPL_ID))
 # define(`SMART_TX_CHANNELS', 4)
-ifdef(`SMART_TX_CHANNELS',`',`errprint(note: Need to define DAI TX channel number for sof-smart-amplifier
+ifdef(`SMART_TX_CHANNELS',`',`fatal_error(note: Need to define DAI TX channel number for sof-smart-amplifier
 )')
 # define(`SMART_RX_CHANNELS', 8)
-ifdef(`SMART_RX_CHANNELS',`',`errprint(note: Need to define DAI RX channel number for sof-smart-amplifier
+ifdef(`SMART_RX_CHANNELS',`',`fatal_error(note: Need to define DAI RX channel number for sof-smart-amplifier
 )')
 # define(`SMART_FB_CHANNELS', 4)
-ifdef(`SMART_FB_CHANNELS',`',`errprint(note: Need to define feedback channel number for sof-smart-amplifier
+ifdef(`SMART_FB_CHANNELS',`',`fatal_error(note: Need to define feedback channel number for sof-smart-amplifier
 )')
 define(`SMART_PB_PPL_NAME', concat(`PIPELINE_PCM_', SMART_PB_PPL_ID))
 # Ref capture related
 # define(`SMART_REF_PPL_ID', 11)
-ifdef(`SMART_REF_PPL_ID',`',`errprint(note: Need to define Echo Ref pipeline ID for sof-smart-amplifier
+ifdef(`SMART_REF_PPL_ID',`',`fatal_error(note: Need to define Echo Ref pipeline ID for sof-smart-amplifier
 )')
 # define(`SMART_REF_CH_NUM', 4)
-ifdef(`SMART_REF_CH_NUM',`',`errprint(note: Need to define Echo Ref channel number for sof-smart-amplifier
+ifdef(`SMART_REF_CH_NUM',`',`fatal_error(note: Need to define Echo Ref channel number for sof-smart-amplifier
 )')
 define(`SMART_PIPE_SINK', concat(`PIPELINE_SINK_', SMART_REF_PPL_ID))
 # define(`N_SMART_DEMUX', `MUXDEMUX'SMART_REF_PPL_ID`.'$1)
 define(`SMART_REF_PPL_NAME', concat(`PIPELINE_PCM_', SMART_REF_PPL_ID))
 # PCM related
 # define(`SMART_PCM_ID', 0)
-ifdef(`SMART_PCM_ID',`',`errprint(note: Need to define PCM ID for sof-smart-amplifier
+ifdef(`SMART_PCM_ID',`',`fatal_error(note: Need to define PCM ID for sof-smart-amplifier
 )')
-# define(`SMART_PCM_NAME', `smart373-spk')
-ifdef(`SMART_PCM_NAME',`',`errprint(note: Need to define Echo Ref pipeline ID for sof-smart-amplifier
+ifdef(`SMART_PCM_NAME',`',`fatal_error(note: Need to define Speaker PCM name for sof-smart-amplifier
 )')
+
+#The long process time (aprox. 8ms) and process length (16ms in 16k sample rate) of igo_nr starve
+#the scheduler and results in SMART_AMP underflow, ending up with smart_amp component reset and close.
+#So increase the buffer size of SMART_AMP is necessary.
+ifdef(`IGO', `define(`SMART_AMP_PERIOD', 16000)', `define(`SMART_AMP_PERIOD', 1000)')
 
 ifelse(SDW, `1',
 `
@@ -123,7 +127,7 @@ dnl     time_domain, sched_comp)
 # Set 1000us deadline on core 0 with priority 0
 PIPELINE_PCM_ADD(sof/pipe-smart-amplifier-playback.m4,
 	SMART_PB_PPL_ID, SMART_PCM_ID, SMART_PB_CH_NUM, s32le,
-	1000, 0, SMART_AMP_CORE,
+	SMART_AMP_PERIOD, 0, SMART_AMP_CORE,
 	48000, 48000, 48000)
 
 # Low Latency capture pipeline 2 on PCM 0 using max 2 channels of s32le.
@@ -132,13 +136,13 @@ ifelse(SDW, `1',
 `
 PIPELINE_PCM_ADD(sof/pipe-amp-ref-capture.m4,
         SMART_REF_PPL_ID, eval(SMART_PCM_ID + 1), SMART_REF_CH_NUM, s32le,
-        1000, 0, 0,
+        SMART_AMP_PERIOD, 0, 0,
         48000, 48000, 48000)
 ',
 `
 PIPELINE_PCM_ADD(sof/pipe-amp-ref-capture.m4,
 	SMART_REF_PPL_ID, SMART_PCM_ID, SMART_REF_CH_NUM, s32le,
-	1000, 0, SMART_AMP_CORE,
+	SMART_AMP_PERIOD, 0, SMART_AMP_CORE,
 	48000, 48000, 48000)
 ')
 
@@ -158,14 +162,14 @@ ifelse(SDW, `1',
 DAI_ADD(sof/pipe-dai-playback.m4,
         SMART_PB_PPL_ID, ALH, SMART_ALH_INDEX, SMART_ALH_PLAYBACK_NAME,
         SMART_PIPE_SOURCE, 2, s24le,
-        1000, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
+        SMART_AMP_PERIOD, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
 
 # capture DAI is ALH(ALH_INDEX) using 2 periods
 # Buffers use s32le format, 1000us deadline on core 0 with priority 0
 DAI_ADD(sof/pipe-dai-capture.m4,
         SMART_REF_PPL_ID, ALH, eval(SMART_ALH_INDEX + 1), SMART_ALH_CAPTURE_NAME,
         SMART_PIPE_SINK, 2, s24le,
-        1000, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
+        SMART_AMP_PERIOD, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
 ',
 `
 # playback DAI is SSP(SPP_INDEX) using 2 periods
@@ -173,20 +177,20 @@ DAI_ADD(sof/pipe-dai-capture.m4,
 DAI_ADD(sof/pipe-dai-playback.m4,
 	SMART_PB_PPL_ID, SSP, SMART_SSP_INDEX, SMART_SSP_NAME,
 	SMART_PIPE_SOURCE, 2, s32le,
-	1000, 0, SMART_AMP_CORE, SCHEDULE_TIME_DOMAIN_TIMER)
+	SMART_AMP_PERIOD, 0, SMART_AMP_CORE, SCHEDULE_TIME_DOMAIN_TIMER)
 
 # capture DAI is SSP(SSP_INDEX) using 2 periods
 # Buffers use s32le format, 1000us deadline on core 0 with priority 0
 DAI_ADD(sof/pipe-dai-capture.m4,
 	SMART_REF_PPL_ID, SSP, SMART_SSP_INDEX, SMART_SSP_NAME,
 	SMART_PIPE_SINK, 2, s32le,
-	1000, 0, SMART_AMP_CORE, SCHEDULE_TIME_DOMAIN_TIMER)
+	SMART_AMP_PERIOD, 0, SMART_AMP_CORE, SCHEDULE_TIME_DOMAIN_TIMER)
 ')
 
 # Connect demux to smart_amp
-ifdef(`N_SMART_REF_BUF',`',`errprint(note: Need to define ref buffer name for connection
+ifdef(`N_SMART_REF_BUF',`',`fatal_error(note: Need to define ref buffer name for connection
 )')
-ifdef(`N_SMART_DEMUX',`',`errprint(note: Need to define demux widget name for connection
+ifdef(`N_SMART_DEMUX',`',`fatal_error(note: Need to define demux widget name for connection
 )')
 SectionGraph."PIPE_SMART_AMP" {
 	index "0"
@@ -201,7 +205,7 @@ SectionGraph."PIPE_SMART_AMP" {
 ifelse(SDW, `1',
 `
 PCM_PLAYBACK_ADD(SMART_PCM_NAME, SMART_PCM_ID, SMART_PB_PPL_NAME)
-PCM_CAPTURE_ADD(echo, eval(SMART_PCM_ID + 1), SMART_REF_PPL_NAME)
+PCM_CAPTURE_ADD(Amplifier Reference, eval(SMART_PCM_ID + 1), SMART_REF_PPL_NAME)
 ',
 `
 dnl PCM_DUPLEX_ADD(name, pcm_id, playback, capture)

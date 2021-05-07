@@ -9,14 +9,23 @@
 # github.com also has a powerful web editor that can be used without
 # committing.
 
-name: Pull Requests
+# This is the name of this workflow and should technically be called
+# something like "Main Workflow" but the place where most people see
+# this name is the Checks window next to other, non-github checks.
+name: GitHub Actions
 
 # yamllint disable-line rule:truthy
 on:
   push:
-    branches: [master]
+    branches:
+      - 'main'
+      - 'stable-**'
+      - '**-stable'
   pull_request:
-    branches: [master]
+    branches:
+      - 'main'
+      - 'stable-**'
+      - '**-stable'
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -64,7 +73,7 @@ jobs:
         run: ./scripts/host-testbench.sh
 
 
-  SOF-build-only:
+  gcc-build-only:
     runs-on: ubuntu-20.04
 
     strategy:
@@ -92,7 +101,7 @@ jobs:
   # before committing it; also deemed overkill for the current amount of
   # duplication.
 
-  SOF-qemu-boot:
+  qemu-boot-test:
     runs-on: ubuntu-20.04
 
     strategy:
@@ -108,20 +117,18 @@ jobs:
       - uses: actions/checkout@v2
         with: {fetch-depth: 0, submodules: recursive}
 
-      # FIXME: could/should probably use ./scripts/xtensa-build-all.sh
-      # -o agent.config instead of hiding this here.
       - name: turn off HAVE_AGENT
-        run: sed -i $(($(grep "config HAVE_AGENT" -n src/platform/Kconfig |
-          cut -f1 -d:)+2))"s/default y/default n/" src/platform/Kconfig
+        run: echo CONFIG_HAVE_AGENT=n >
+          src/arch/xtensa/configs/override/no-agent.config
 
       - name: docker SOF
         run: docker pull thesofproject/sof && docker tag thesofproject/sof sof
 
-      - name: xtensa-build-all
+      - name: xtensa-build-all -o no-agent
         env:
           PLATFORM: ${{ matrix.platform }}
         run: ./scripts/docker-run.sh
-          ./scripts/xtensa-build-all.sh -r ${PLATFORM}
+          ./scripts/xtensa-build-all.sh -o no-agent -r ${PLATFORM}
 
       - name: docker QEMU
         run: docker pull thesofproject/sofqemu &&
@@ -133,7 +140,8 @@ jobs:
         run: ./scripts/docker-qemu.sh
           ../sof.git/scripts/qemu-check.sh ${PLATFORM}
 
-  yamllint-actions:
+  yamllint-gh:
+    name: yamllint /.github/workflows/
     runs-on: ubuntu-20.04
 
     steps:

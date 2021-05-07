@@ -13,7 +13,8 @@
 #include <sof/schedule/task.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/notifier.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/driver.h>
+#include <sof/ipc/topology.h>
 #include <sof/lib/agent.h>
 #include <sof/lib/dai.h>
 #include <sof/lib/dma.h>
@@ -56,34 +57,34 @@ int tb_pipeline_setup(struct sof *sof)
 }
 
 /* set up pcm params, prepare and trigger pipeline */
-int tb_pipeline_start(struct ipc *ipc, struct sof_ipc_pipe_new *ipc_pipe,
+int tb_pipeline_start(struct ipc *ipc, struct pipeline *p,
 		      struct testbench_prm *tp)
 {
 	struct ipc_comp_dev *pcm_dev;
-	struct pipeline *p;
 	struct comp_dev *cd;
 	int ret;
 
 	/* set up pipeline params */
-	ret = tb_pipeline_params(ipc, ipc_pipe, tp);
+	ret = tb_pipeline_params(ipc, p, tp);
 	if (ret < 0) {
 		fprintf(stderr, "error: pipeline params\n");
 		return -EINVAL;
 	}
 
 	/* Get IPC component device for pipeline */
-	pcm_dev = ipc_get_comp_by_id(ipc, ipc_pipe->sched_id);
+	pcm_dev = ipc_get_comp_by_id(ipc, p->sched_id);
 	if (!pcm_dev) {
 		fprintf(stderr, "error: ipc get comp\n");
 		return -EINVAL;
 	}
 
-	/* Point to pipeline */
+	/* Point to pipeline component device */
 	cd = pcm_dev->cd;
-	p = pcm_dev->cd->pipeline;
 
 	/* Component prepare */
 	ret = pipeline_prepare(p, cd);
+	if (ret < 0)
+		printf("Warning: Failed prepare pipeline command.\n");
 
 	/* Start the pipeline */
 	ret = pipeline_trigger(p, cd, COMP_TRIGGER_START);
@@ -94,11 +95,10 @@ int tb_pipeline_start(struct ipc *ipc, struct sof_ipc_pipe_new *ipc_pipe,
 }
 
 /* pipeline pcm params */
-int tb_pipeline_params(struct ipc *ipc, struct sof_ipc_pipe_new *ipc_pipe,
+int tb_pipeline_params(struct ipc *ipc, struct pipeline *p,
 		       struct testbench_prm *tp)
 {
 	struct ipc_comp_dev *pcm_dev;
-	struct pipeline *p;
 	struct comp_dev *cd;
 	struct sof_ipc_pcm_params params;
 	char message[DEBUG_MSG_LEN];
@@ -106,12 +106,12 @@ int tb_pipeline_params(struct ipc *ipc, struct sof_ipc_pipe_new *ipc_pipe,
 	int period;
 	int ret = 0;
 
-	if (!ipc_pipe) {
-		fprintf(stderr, "error: ipc_pipe NULL\n");
+	if (!p) {
+		fprintf(stderr, "error: pipeline is NULL\n");
 		return -EINVAL;
 	}
 
-	period = ipc_pipe->period;
+	period = p->period;
 
 	/* Compute period from sample rates */
 	fs_period = (int)(0.9999 + tp->fs_in * period / 1e6);
@@ -119,7 +119,7 @@ int tb_pipeline_params(struct ipc *ipc, struct sof_ipc_pipe_new *ipc_pipe,
 	debug_print(message);
 
 	/* set pcm params */
-	params.comp_id = ipc_pipe->comp_id;
+	params.comp_id = p->comp_id;
 	params.params.buffer_fmt = SOF_IPC_BUFFER_INTERLEAVED;
 	params.params.frame_fmt = tp->frame_fmt;
 	params.params.direction = SOF_IPC_STREAM_PLAYBACK;
@@ -150,19 +150,14 @@ int tb_pipeline_params(struct ipc *ipc, struct sof_ipc_pipe_new *ipc_pipe,
 	}
 
 	/* get scheduling component device for pipeline*/
-	pcm_dev = ipc_get_comp_by_id(ipc, ipc_pipe->sched_id);
+	pcm_dev = ipc_get_comp_by_id(ipc, p->sched_id);
 	if (!pcm_dev) {
 		fprintf(stderr, "error: ipc get comp\n");
 		return -EINVAL;
 	}
 
-	/* point to pipeline */
+	/* point to pipeline component device */
 	cd = pcm_dev->cd;
-	p = pcm_dev->cd->pipeline;
-	if (!p) {
-		fprintf(stderr, "error: pipeline NULL\n");
-		return -EINVAL;
-	}
 
 	/* pipeline params */
 	ret = pipeline_params(p, cd, &params);

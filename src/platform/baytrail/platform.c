@@ -9,7 +9,7 @@
 #include <sof/debug/debug.h>
 #include <sof/drivers/dw-dma.h>
 #include <sof/drivers/interrupt.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/driver.h>
 #include <sof/drivers/pmc.h>
 #include <sof/drivers/timer.h>
 #include <sof/fw-ready-metadata.h>
@@ -219,8 +219,7 @@ int platform_init(struct sof *sof)
 
 	/* init low latency timer domain and scheduler */
 	sof->platform_timer_domain =
-		timer_domain_init(sof->platform_timer, PLATFORM_DEFAULT_CLOCK,
-				  CONFIG_SYSTICK_PERIOD);
+		timer_domain_init(sof->platform_timer, PLATFORM_DEFAULT_CLOCK);
 	scheduler_init_ll(sof->platform_timer_domain);
 
 	/* init the system agent */

@@ -10,7 +10,7 @@
 #include <sof/audio/kpb.h>
 #include <sof/common.h>
 #include <sof/debug/panic.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/memory.h>
 #include <sof/lib/notifier.h>
@@ -32,6 +32,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <sof/samples/audio/kwd_nn_detect_test.h>
 
 #define ACTIVATION_DEFAULT_SHIFT 3
 #define ACTIVATION_DEFAULT_COEF 0.05
@@ -47,6 +48,8 @@
 
 /* default number of samples before detection is activated  */
 #define KEYPHRASE_DEFAULT_PREAMBLE_LENGTH 0
+
+#define KWD_NN_BUFF_ALIGN	64
 
 static const struct comp_driver comp_keyword;
 
@@ -71,6 +74,11 @@ struct comp_data {
 	uint16_t sample_valid_bytes;
 	struct kpb_event_data event_data;
 	struct kpb_client client_data;
+
+#if CONFIG_KWD_NN_SAMPLE_KEYPHRASE
+	int16_t *input;
+	size_t input_size;
+#endif
 
 	struct sof_ipc_comp_event event;
 	struct ipc_msg *msg;	/**< host notification */
@@ -136,7 +144,7 @@ static void notify_kpb(const struct comp_dev *dev)
 		       sizeof(cd->event_data));
 }
 
-static void detect_test_notify(const struct comp_dev *dev)
+void detect_test_notify(const struct comp_dev *dev)
 {
 	notify_host(dev);
 	notify_kpb(dev);
@@ -269,8 +277,12 @@ static struct comp_dev *test_keyword_new(const struct comp_driver *drv,
 	if (!cd)
 		goto fail;
 
+#if CONFIG_KWD_NN_SAMPLE_KEYPHRASE
+	cd->detect_func = kwd_nn_detect_test;
+#else
 	/* using default processing function */
 	cd->detect_func = default_detect_test;
+#endif
 
 	comp_set_drvdata(dev, cd);
 
@@ -309,6 +321,18 @@ static struct comp_dev *test_keyword_new(const struct comp_driver *drv,
 		comp_err(dev, "test_keyword_new(): ipc notification init failed");
 		goto fail;
 	}
+
+#if CONFIG_KWD_NN_SAMPLE_KEYPHRASE
+	/* global buffer to accumulate data for processing */
+	cd->input = rballoc_align(0, SOF_MEM_CAPS_RAM,
+				  sizeof(int16_t) * KWD_NN_IN_BUFF_SIZE, 64);
+	if (!cd->input) {
+		comp_err(dev, "test_keyword_new(): input alloc failed");
+		return NULL;
+	}
+	bzero(cd->input, sizeof(int16_t) * KWD_NN_IN_BUFF_SIZE);
+	cd->input_size = 0;
+#endif
 
 	dev->state = COMP_STATE_READY;
 	return dev;
@@ -551,7 +575,7 @@ static int test_keyword_ctrl_get_data(struct comp_dev *dev,
 static int test_keyword_cmd(struct comp_dev *dev, int cmd, void *data,
 			    int max_data_size)
 {
-	struct sof_ipc_ctrl_data *cdata = data;
+	struct sof_ipc_ctrl_data *cdata = ASSUME_ALIGNED(data, 4);
 
 	comp_info(dev, "test_keyword_cmd()");
 
@@ -651,6 +675,95 @@ static int test_keyword_prepare(struct comp_dev *dev)
 					   &cd->data_blob_crc);
 
 	return comp_set_state(dev, COMP_TRIGGER_PREPARE);
+}
+
+uint16_t test_keyword_get_sample_valid_bytes(struct comp_dev *dev)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	return cd->sample_valid_bytes;
+}
+
+uint32_t test_keyword_get_detected(struct comp_dev *dev)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	return cd->detected;
+}
+
+void test_keyword_set_detected(struct comp_dev *dev, uint32_t detected)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	cd->detected = detected;
+}
+
+#if CONFIG_KWD_NN_SAMPLE_KEYPHRASE
+const int16_t *test_keyword_get_input(struct comp_dev *dev)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	return cd->input;
+}
+
+int16_t test_keyword_get_input_byte(struct comp_dev *dev, uint32_t index)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	if (index >= KWD_NN_IN_BUFF_SIZE * sizeof(int16_t))
+		return -EINVAL;
+
+	return *((unsigned char *)cd->input + index);
+}
+
+int16_t test_keyword_get_input_elem(struct comp_dev *dev, uint32_t index)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	if (index >= KWD_NN_IN_BUFF_SIZE)
+		return -EINVAL;
+	return cd->input[index];
+}
+
+int test_keyword_set_input_elem(struct comp_dev *dev, uint32_t index, int16_t val)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	if (index >= KWD_NN_IN_BUFF_SIZE)
+		return -EINVAL;
+
+	cd->input[index] = val;
+
+	return 0;
+}
+
+size_t test_keyword_get_input_size(struct comp_dev *dev)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	return cd->input_size;
+}
+
+void test_keyword_set_input_size(struct comp_dev *dev, size_t input_size)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	cd->input_size = input_size;
+}
+#endif
+
+uint32_t test_keyword_get_drain_req(struct comp_dev *dev)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	return cd->drain_req;
+}
+
+void test_keyword_set_drain_req(struct comp_dev *dev, uint32_t drain_req)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+
+	cd->drain_req = drain_req;
 }
 
 static const struct comp_driver comp_keyword = {
