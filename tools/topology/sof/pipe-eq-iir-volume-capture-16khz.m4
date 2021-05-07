@@ -12,10 +12,11 @@ include(`pga.m4')
 include(`dai.m4')
 include(`pipeline.m4')
 include(`bytecontrol.m4')
+include(`mixercontrol.m4')
 include(`eq_iir.m4')
 
 define(`CONTROL_NAME', 2nd Capture Volume)
-define(`PGA_NAME', Dmic1)
+ifdef(`PGA_NAME', `', `define(PGA_NAME, N_PGA(0))')
 
 #
 # Controls
@@ -30,7 +31,7 @@ C_CONTROLMIXER(Master Capture Volume, PIPELINE_ID,
 	false,
 	CONTROLMIXER_TLV(TLV 80 steps from -50dB to +20dB for 1dB, vtlv_m50s1),
 	Channel register and shift for Front Left/Right,
-	LIST(`	', KCONTROL_CHANNEL(FL, 1, 0), KCONTROL_CHANNEL(FR, 1, 1)))
+	VOLUME_CHANNEL_MAP)
 
 # Volume Configuration
 define(DEF_PGA_TOKENS, concat(`pga_tokens_', PIPELINE_ID))

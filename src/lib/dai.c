@@ -139,6 +139,7 @@ struct dai *dai_get(uint32_t type, uint32_t index, uint32_t flags)
 	int ret = 0;
 	const struct dai_type_info *dti;
 	struct dai *d;
+	uint32_t flags_irq;
 
 	dti = dai_find_type(type);
 	if (!dti)
@@ -146,11 +147,10 @@ struct dai *dai_get(uint32_t type, uint32_t index, uint32_t flags)
 
 	for (d = dti->dai_array; d < dti->dai_array + dti->num_dais; d++) {
 		if (d->index != index) {
-			platform_shared_commit(d, sizeof(*d));
 			continue;
 		}
 		/* device created? */
-		spin_lock(&d->lock);
+		spin_lock_irq(&d->lock, flags_irq);
 		if (d->sref == 0) {
 			if (flags & DAI_CREAT)
 				ret = dai_probe(d);
@@ -163,9 +163,7 @@ struct dai *dai_get(uint32_t type, uint32_t index, uint32_t flags)
 		tr_info(&dai_tr, "dai_get type %d index %d new sref %d",
 			type, index, d->sref);
 
-		platform_shared_commit(d, sizeof(*d));
-
-		spin_unlock(&d->lock);
+		spin_unlock_irq(&d->lock, flags_irq);
 
 		return !ret ? d : NULL;
 	}
@@ -176,8 +174,9 @@ struct dai *dai_get(uint32_t type, uint32_t index, uint32_t flags)
 void dai_put(struct dai *dai)
 {
 	int ret;
+	uint32_t flags;
 
-	spin_lock(&dai->lock);
+	spin_lock_irq(&dai->lock, flags);
 	if (--dai->sref == 0) {
 		ret = dai_remove(dai);
 		if (ret < 0) {
@@ -187,6 +186,5 @@ void dai_put(struct dai *dai)
 	}
 	tr_info(&dai_tr, "dai_put type %d index %d new sref %d",
 		dai->drv->type, dai->index, dai->sref);
-	platform_shared_commit(dai, sizeof(*dai));
-	spin_unlock(&dai->lock);
+	spin_unlock_irq(&dai->lock, flags);
 }

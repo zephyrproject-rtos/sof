@@ -5,7 +5,6 @@
 // Author: Artur Kloniecki <arturx.kloniecki@linux.intel.com>
 // Author: Adrian Bonislawski <adrian.bonislawski@linux.intel.com>
 
-
 #include <sof/audio/buffer.h>
 #include <sof/audio/component.h>
 #include <sof/probe/probe.h>
@@ -15,8 +14,8 @@
 #include <sof/lib/dma.h>
 #include <sof/lib/notifier.h>
 #include <sof/lib/uuid.h>
-#include <ipc/topology.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/topology.h>
+#include <sof/ipc/driver.h>
 #include <sof/drivers/timer.h>
 #include <sof/schedule/ll_schedule.h>
 #include <sof/schedule/schedule.h>
@@ -159,7 +158,6 @@ static int probe_dma_init(struct probe_dma_ext *dma, uint32_t direction)
 		return err;
 
 	dma_sg_free(&config.elem_array);
-
 
 	return 0;
 }
@@ -755,7 +753,8 @@ static void probe_cb_produce(void *arg, enum notify_id type, void *data)
 	uint32_t head, tail;
 	uint32_t free_bytes = 0;
 	int32_t copy_bytes = 0;
-	uint32_t ret, i, j;
+	int ret;
+	uint32_t i, j;
 	uint32_t format;
 
 	buffer_id = buffer->id;
@@ -897,7 +896,7 @@ static void probe_cb_free(void *arg, enum notify_id type, void *data)
 {
 	struct buffer_cb_free *cb_data = data;
 	uint32_t buffer_id = cb_data->buffer->id;
-	uint32_t ret;
+	int ret;
 
 	tr_dbg(&pr_tr, "probe_cb_free() buffer_id = %u", buffer_id);
 

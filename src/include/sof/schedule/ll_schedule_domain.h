@@ -42,7 +42,7 @@ struct ll_schedule_domain_ops {
 };
 
 struct ll_schedule_domain {
-	uint64_t last_tick;		/**< timestamp of last run */
+	uint64_t next_tick;		/**< ticks just set for next run */
 	spinlock_t lock;		/**< standard lock */
 	atomic_t total_num_tasks;	/**< total number of registered tasks */
 	atomic_t num_clients;		/**< number of registered cores */
@@ -50,6 +50,7 @@ struct ll_schedule_domain {
 	int type;			/**< domain type */
 	int clk;			/**< source clock */
 	bool synchronous;		/**< are tasks should be synchronous */
+	bool full_sync;			/**< tasks should be full synchronous, no time dependent */
 	void *priv_data;		/**< pointer to private data */
 	bool registered[CONFIG_CORE_COUNT];		/**< registered cores */
 	bool enabled[CONFIG_CORE_COUNT];		/**< enabled cores */
@@ -80,14 +81,15 @@ static inline struct ll_schedule_domain *domain_init
 	domain->type = type;
 	domain->clk = clk;
 	domain->synchronous = synchronous;
+	domain->full_sync = false;
 	domain->ticks_per_ms = clock_ms_to_ticks(clk, 1);
 	domain->ops = ops;
+	/* maximum value means no tick has been set to timer */
+	domain->next_tick = UINT64_MAX;
 
 	spinlock_init(&domain->lock);
 	atomic_init(&domain->total_num_tasks, 0);
 	atomic_init(&domain->num_clients, 0);
-
-	platform_shared_commit(domain, sizeof(*domain));
 
 	return domain;
 }
@@ -102,8 +104,6 @@ static inline int domain_register(struct ll_schedule_domain *domain,
 
 	ret = domain->ops->domain_register(domain, period, task, handler, arg);
 
-	platform_shared_commit(domain, sizeof(*domain));
-
 	return ret;
 }
 
@@ -114,7 +114,6 @@ static inline void domain_unregister(struct ll_schedule_domain *domain,
 
 	domain->ops->domain_unregister(domain, task, num_tasks);
 
-	platform_shared_commit(domain, sizeof(*domain));
 }
 
 static inline void domain_enable(struct ll_schedule_domain *domain, int core)
@@ -122,7 +121,6 @@ static inline void domain_enable(struct ll_schedule_domain *domain, int core)
 	if (domain->ops->domain_enable)
 		domain->ops->domain_enable(domain, core);
 
-	platform_shared_commit(domain, sizeof(*domain));
 }
 
 static inline void domain_disable(struct ll_schedule_domain *domain, int core)
@@ -130,23 +128,27 @@ static inline void domain_disable(struct ll_schedule_domain *domain, int core)
 	if (domain->ops->domain_disable)
 		domain->ops->domain_disable(domain, core);
 
-	platform_shared_commit(domain, sizeof(*domain));
 }
 
+/* configure the next interrupt for domain */
 static inline void domain_set(struct ll_schedule_domain *domain, uint64_t start)
 {
 	if (domain->ops->domain_set)
 		domain->ops->domain_set(domain, start);
+	else
+		domain->next_tick = start;
 
-	platform_shared_commit(domain, sizeof(*domain));
 }
 
+/* clear the interrupt for domain */
 static inline void domain_clear(struct ll_schedule_domain *domain)
 {
 	if (domain->ops->domain_clear)
 		domain->ops->domain_clear(domain);
 
-	platform_shared_commit(domain, sizeof(*domain));
+	/* reset to denote no tick/interrupt is set */
+	domain->next_tick = UINT64_MAX;
+
 }
 
 static inline bool domain_is_pending(struct ll_schedule_domain *domain,
@@ -158,13 +160,10 @@ static inline bool domain_is_pending(struct ll_schedule_domain *domain,
 
 	ret = domain->ops->domain_is_pending(domain, task, comp);
 
-	platform_shared_commit(domain, sizeof(*domain));
-
 	return ret;
 }
 
-struct ll_schedule_domain *timer_domain_init(struct timer *timer, int clk,
-					     uint64_t timeout);
+struct ll_schedule_domain *timer_domain_init(struct timer *timer, int clk);
 
 struct ll_schedule_domain *dma_multi_chan_domain_init(struct dma *dma_array,
 						      uint32_t num_dma, int clk,

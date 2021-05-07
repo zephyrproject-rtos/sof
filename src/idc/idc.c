@@ -7,7 +7,9 @@
 #include <sof/audio/component.h>
 #include <sof/audio/component_ext.h>
 #include <sof/drivers/idc.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
+#include <sof/ipc/topology.h>
+#include <sof/ipc/schedule.h>
 #include <sof/drivers/timer.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/clk.h>
@@ -16,6 +18,7 @@
 #include <sof/lib/notifier.h>
 #include <sof/lib/uuid.h>
 #include <sof/platform.h>
+#include <arch/lib/wait.h>
 #include <sof/schedule/edf_schedule.h>
 #include <sof/schedule/ll_schedule.h>
 #include <sof/schedule/schedule.h>
@@ -28,7 +31,7 @@
 #include <stdint.h>
 
 /** \brief IDC message payload per core. */
-static SHARED_DATA struct idc_payload payload[CONFIG_CORE_COUNT];
+static SHARED_DATA struct idc_payload static_payload[CONFIG_CORE_COUNT];
 
 /* 379a60ae-cedb-4777-aaf2-5659b0a85735 */
 DECLARE_SOF_UUID("idc", idc_uuid, 0x379a60ae, 0xcedb, 0x4777,
@@ -40,9 +43,11 @@ DECLARE_TR_CTX(idc_tr, SOF_UUID(idc_uuid), LOG_LEVEL_INFO);
 DECLARE_SOF_UUID("comp-task", idc_comp_task_uuid, 0xb90f5a4e, 0x5537, 0x4375,
 		 0xa1, 0xdf, 0x95, 0x48, 0x54, 0x72, 0xff, 0x9e);
 
+#ifndef __ZEPHYR__
 /* a5dacb0e-88dc-415c-a1b5-3e8df77f1976 */
 DECLARE_SOF_UUID("idc-cmd-task", idc_cmd_task_uuid, 0xa5dacb0e, 0x88dc, 0x415c,
 		 0xa1, 0xb5, 0x3e, 0x8d, 0xf7, 0x7f, 0x19, 0x76);
+#endif
 
 /**
  * \brief Sets IDC command status after execution.
@@ -56,7 +61,6 @@ static void idc_msg_status_set(int status, uint32_t core)
 
 	*(uint32_t *)payload->data = status;
 
-	platform_shared_commit(payload, sizeof(*payload));
 }
 
 /**
@@ -72,7 +76,6 @@ int idc_msg_status_get(uint32_t core)
 
 	status = *(uint32_t *)payload->data;
 
-	platform_shared_commit(payload, sizeof(*payload));
 
 	return status;
 }
@@ -93,19 +96,22 @@ int idc_wait_in_blocking_mode(uint32_t target_core, bool (*cond)(int))
 		IDC_TIMEOUT / 1000;
 
 	while (!cond(target_core)) {
-		if (deadline < platform_timer_get(timer)) {
-			/* safe check in case we've got preempted
-			 * after read
-			 */
-			if (cond(target_core))
-				break;
 
-			tr_err(&idc_tr, "idc_wait_in_blocking_mode() error: timeout");
-			return -ETIME;
-		}
+		/* spin here so other core can access IO and timers freely */
+		idelay(8192);
+
+		if (deadline < platform_timer_get(timer))
+			break;
 	}
 
-	return 0;
+	/* safe check in case we've got preempted
+	 * after read
+	 */
+	if (cond(target_core))
+		return 0;
+
+	tr_err(&idc_tr, "idc_wait_in_blocking_mode() error: timeout");
+	return -ETIME;
 }
 
 /**
@@ -114,7 +120,7 @@ int idc_wait_in_blocking_mode(uint32_t target_core, bool (*cond)(int))
 static void idc_ipc(void)
 {
 	struct ipc *ipc = ipc_get();
-	struct sof_ipc_cmd_hdr *hdr = ipc->comp_data;
+	ipc_cmd_hdr *hdr = ipc->comp_data;
 
 	ipc_cmd(hdr);
 }
@@ -140,9 +146,6 @@ static int idc_params(uint32_t comp_id)
 
 	ret = comp_params(ipc_dev->cd, params);
 
-	platform_shared_commit(payload, sizeof(*payload));
-	platform_shared_commit(ipc_dev, sizeof(*ipc_dev));
-	platform_shared_commit(ipc, sizeof(*ipc));
 
 	return ret;
 }
@@ -197,9 +200,6 @@ static int idc_prepare(uint32_t comp_id)
 	ret = comp_prepare(ipc_dev->cd);
 
 out:
-	platform_shared_commit(dev, sizeof(*dev));
-	platform_shared_commit(ipc_dev, sizeof(*ipc_dev));
-	platform_shared_commit(ipc, sizeof(*ipc));
 
 	return ret;
 }
@@ -240,10 +240,6 @@ static int idc_trigger(uint32_t comp_id)
 	}
 
 out:
-	platform_shared_commit(payload, sizeof(*payload));
-	platform_shared_commit(ipc_dev->cd, sizeof(*ipc_dev->cd));
-	platform_shared_commit(ipc_dev, sizeof(*ipc_dev));
-	platform_shared_commit(ipc, sizeof(*ipc));
 
 	return ret;
 }
@@ -265,8 +261,6 @@ static int idc_reset(uint32_t comp_id)
 
 	ret = comp_reset(ipc_dev->cd);
 
-	platform_shared_commit(ipc_dev, sizeof(*ipc_dev));
-	platform_shared_commit(ipc, sizeof(*ipc));
 
 	return ret;
 }
@@ -310,23 +304,32 @@ void idc_cmd(struct idc_msg *msg)
 	idc_msg_status_set(ret, cpu_get_id());
 }
 
+/* Runs on each CPU */
 int idc_init(void)
 {
 	struct idc **idc = idc_get();
+#ifndef __ZEPHYR__
 	struct task_ops ops = {
 		.run = idc_do_cmd,
 		.get_deadline = ipc_task_deadline,
 	};
+#endif
 
 	tr_info(&idc_tr, "idc_init()");
 
 	/* initialize idc data */
 	*idc = rzalloc(SOF_MEM_ZONE_SYS, 0, SOF_MEM_CAPS_RAM, sizeof(**idc));
-	(*idc)->payload = cache_to_uncache((struct idc_payload *)payload);
+	(*idc)->payload = cache_to_uncache((struct idc_payload *)static_payload);
 
 	/* process task */
+#ifndef __ZEPHYR__
 	schedule_task_init_edf(&(*idc)->idc_task, SOF_UUID(idc_cmd_task_uuid),
 			       &ops, *idc, cpu_get_id(), 0);
 
 	return platform_idc_init();
+#else
+	idc_init_thread();
+
+	return 0;
+#endif
 }

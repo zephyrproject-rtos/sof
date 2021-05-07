@@ -121,7 +121,6 @@ int idc_send_msg(struct idc_msg *msg, uint32_t mode)
 		ret = memcpy_s(payload->data, IDC_MAX_PAYLOAD_SIZE,
 			       msg->payload, msg->size);
 		assert(!ret);
-		platform_shared_commit(payload, sizeof(*payload));
 	}
 
 	idc_write(IPC_IDCIETC(msg->core), core, msg->extension);
@@ -142,6 +141,11 @@ int idc_send_msg(struct idc_msg *msg, uint32_t mode)
 
 	case IDC_POWER_UP:
 		ret = idc_wait_in_blocking_mode(msg->core, idc_is_powered_up);
+		if (ret < 0) {
+			tr_err(&idc_tr, "idc_send_msg(), power up core %d failed, reason 0x%x",
+			       msg->core,
+			       mailbox_sw_reg_read(PLATFORM_TRACEP_SECONDARY_CORE(msg->core)));
+		}
 		break;
 	}
 

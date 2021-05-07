@@ -57,12 +57,13 @@ static inline void select_cpu_clock_hw(int freq_idx, bool release_unused)
 		io_reg_write(SHIM_BASE + SHIM_CLKCTL,
 			     (io_reg_read(SHIM_BASE + SHIM_CLKCTL) &
 			      ~SHIM_CLKCTL_OSC_REQUEST_MASK) | enc);
-#if CONFIG_TIGERLAKE
-		/* TGL specific HW recommended flow */
-		if (freq_idx != CPU_HPRO_FREQ_IDX)
-			pm_runtime_put(PM_RUNTIME_DSP, PWRD_BY_HPRO | (CONFIG_CORE_COUNT - 1));
-#endif
 	}
+
+#if CONFIG_TIGERLAKE
+	/* TGL specific HW recommended flow */
+	if (freq_idx != CPU_HPRO_FREQ_IDX)
+		pm_runtime_put(PM_RUNTIME_DSP, PWRD_BY_HPRO | (CONFIG_CORE_COUNT - 1));
+#endif
 
 #if CONFIG_DSP_RESIDENCY_COUNTERS
 	if (get_dsp_r_state() != r2_r_state) {
@@ -93,9 +94,6 @@ static inline void select_cpu_clock(int freq_idx, bool release_unused)
 	/* unlock clock for all cores */
 	for (i = CONFIG_CORE_COUNT - 1; i >= 0; i--)
 		spin_unlock_irq(&clk_info[CLK_CPU(i)].lock, flags[i]);
-
-	platform_shared_commit(clk_info,
-			       sizeof(*clk_info) * CONFIG_CORE_COUNT);
 }
 
 /* LPRO_ONLY mode */
@@ -167,7 +165,12 @@ static void platform_clock_low_power_mode(int clock, bool enable)
 	int freq_idx = *cache_to_uncache(&active_freq_idx);
 
 	if (enable && current_freq_idx > CPU_LPRO_FREQ_IDX)
-		select_cpu_clock(CPU_LPRO_FREQ_IDX, true);
+		/* LPRO requests are fast, but requests for other ROs
+		 * can take a lot of time. That's why it's better to
+		 * not release active clock just for waiti,
+		 * so they can be switched without delay on wake up.
+		 */
+		select_cpu_clock(CPU_LPRO_FREQ_IDX, false);
 	else if (!enable && current_freq_idx != freq_idx)
 		select_cpu_clock(freq_idx, true);
 }
@@ -352,5 +355,4 @@ void platform_clock_init(struct sof *sof)
 
 	spinlock_init(&sof->clocks[CLK_SSP].lock);
 
-	platform_shared_commit(sof->clocks, sizeof(*sof->clocks) * NUM_CLOCKS);
 }

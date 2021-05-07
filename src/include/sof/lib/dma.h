@@ -286,8 +286,6 @@ static inline struct dma_chan_data *dma_channel_get(struct dma *dma,
 {
 	struct dma_chan_data *chan = dma->ops->channel_get(dma, req_channel);
 
-	platform_shared_commit(dma, sizeof(*dma));
-
 	return chan;
 }
 
@@ -295,16 +293,11 @@ static inline void dma_channel_put(struct dma_chan_data *channel)
 {
 	channel->dma->ops->channel_put(channel);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
 }
 
 static inline int dma_start(struct dma_chan_data *channel)
 {
 	int ret = channel->dma->ops->start(channel);
-
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
 
 	return ret;
 }
@@ -312,9 +305,6 @@ static inline int dma_start(struct dma_chan_data *channel)
 static inline int dma_stop(struct dma_chan_data *channel)
 {
 	int ret = channel->dma->ops->stop(channel);
-
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
 
 	return ret;
 }
@@ -330,9 +320,6 @@ static inline int dma_copy(struct dma_chan_data *channel, int bytes,
 {
 	int ret = channel->dma->ops->copy(channel, bytes, flags);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
-
 	return ret;
 }
 /** @} */
@@ -341,18 +328,12 @@ static inline int dma_pause(struct dma_chan_data *channel)
 {
 	int ret = channel->dma->ops->pause(channel);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
-
 	return ret;
 }
 
 static inline int dma_release(struct dma_chan_data *channel)
 {
 	int ret = channel->dma->ops->release(channel);
-
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
 
 	return ret;
 }
@@ -362,9 +343,6 @@ static inline int dma_status(struct dma_chan_data *channel,
 {
 	int ret = channel->dma->ops->status(channel, status, direction);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
-
 	return ret;
 }
 
@@ -373,17 +351,12 @@ static inline int dma_set_config(struct dma_chan_data *channel,
 {
 	int ret = channel->dma->ops->set_config(channel, config);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
-
 	return ret;
 }
 
 static inline int dma_pm_context_restore(struct dma *dma)
 {
 	int ret = dma->ops->pm_context_restore(dma);
-
-	platform_shared_commit(dma, sizeof(*dma));
 
 	return ret;
 }
@@ -392,8 +365,6 @@ static inline int dma_pm_context_store(struct dma *dma)
 {
 	int ret = dma->ops->pm_context_store(dma);
 
-	platform_shared_commit(dma, sizeof(*dma));
-
 	return ret;
 }
 
@@ -401,18 +372,12 @@ static inline int dma_probe(struct dma *dma)
 {
 	int ret = dma->ops->probe(dma);
 
-	platform_shared_commit(dma->chan, sizeof(*dma->chan) *
-			       dma->plat_data.channels);
-	platform_shared_commit(dma, sizeof(*dma));
-
 	return ret;
 }
 
 static inline int dma_remove(struct dma *dma)
 {
 	int ret = dma->ops->remove(dma);
-
-	platform_shared_commit(dma, sizeof(*dma));
 
 	return ret;
 }
@@ -422,9 +387,6 @@ static inline int dma_get_data_size(struct dma_chan_data *channel,
 {
 	int ret = channel->dma->ops->get_data_size(channel, avail, free);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
-
 	return ret;
 }
 
@@ -433,8 +395,6 @@ static inline int dma_get_attribute(struct dma *dma, uint32_t type,
 {
 	int ret = dma->ops->get_attribute(dma, type, value);
 
-	platform_shared_commit(dma, sizeof(*dma));
-
 	return ret;
 }
 
@@ -442,9 +402,6 @@ static inline int dma_interrupt(struct dma_chan_data *channel,
 				enum dma_irq_cmd cmd)
 {
 	int ret = channel->dma->ops->interrupt(channel, cmd);
-
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
 
 	return ret;
 }
@@ -456,8 +413,6 @@ static inline uint32_t dma_reg_read(struct dma *dma, uint32_t reg)
 
 	val = io_reg_read(dma_base(dma) + reg);
 
-	platform_shared_commit(dma, sizeof(*dma));
-
 	return val;
 }
 
@@ -467,8 +422,6 @@ static inline uint16_t dma_reg_read16(struct dma *dma, uint32_t reg)
 
 	val = io_reg_read16(dma_base(dma) + reg);
 
-	platform_shared_commit(dma, sizeof(*dma));
-
 	return val;
 }
 
@@ -476,7 +429,6 @@ static inline void dma_reg_write(struct dma *dma, uint32_t reg, uint32_t value)
 {
 	io_reg_write(dma_base(dma) + reg, value);
 
-	platform_shared_commit(dma, sizeof(*dma));
 }
 
 static inline void dma_reg_write16(struct dma *dma, uint32_t reg,
@@ -484,7 +436,6 @@ static inline void dma_reg_write16(struct dma *dma, uint32_t reg,
 {
 	io_reg_write16(dma_base(dma) + reg, value);
 
-	platform_shared_commit(dma, sizeof(*dma));
 }
 
 static inline void dma_reg_update_bits(struct dma *dma, uint32_t reg,
@@ -492,7 +443,6 @@ static inline void dma_reg_update_bits(struct dma *dma, uint32_t reg,
 {
 	io_reg_update_bits(dma_base(dma) + reg, mask, value);
 
-	platform_shared_commit(dma, sizeof(*dma));
 }
 
 static inline uint32_t dma_chan_reg_read(struct dma_chan_data *channel,
@@ -501,9 +451,6 @@ static inline uint32_t dma_chan_reg_read(struct dma_chan_data *channel,
 	uint32_t val;
 
 	val = io_reg_read(dma_chan_base(channel->dma, channel->index) + reg);
-
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
 
 	return val;
 }
@@ -515,9 +462,6 @@ static inline uint16_t dma_chan_reg_read16(struct dma_chan_data *channel,
 
 	val = io_reg_read16(dma_chan_base(channel->dma, channel->index) + reg);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
-
 	return val;
 }
 
@@ -526,8 +470,6 @@ static inline void dma_chan_reg_write(struct dma_chan_data *channel,
 {
 	io_reg_write(dma_chan_base(channel->dma, channel->index) + reg, value);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
 }
 
 static inline void dma_chan_reg_write16(struct dma_chan_data *channel,
@@ -536,8 +478,6 @@ static inline void dma_chan_reg_write16(struct dma_chan_data *channel,
 	io_reg_write16(dma_chan_base(channel->dma, channel->index) + reg,
 		       value);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
 }
 
 static inline void dma_chan_reg_update_bits(struct dma_chan_data *channel,
@@ -547,8 +487,6 @@ static inline void dma_chan_reg_update_bits(struct dma_chan_data *channel,
 	io_reg_update_bits(dma_chan_base(channel->dma, channel->index) + reg,
 			   mask, value);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
 }
 
 static inline void dma_chan_reg_update_bits16(struct dma_chan_data *channel,
@@ -558,15 +496,11 @@ static inline void dma_chan_reg_update_bits16(struct dma_chan_data *channel,
 	io_reg_update_bits16(dma_chan_base(channel->dma, channel->index) + reg,
 			     mask, value);
 
-	platform_shared_commit(channel->dma, sizeof(*channel->dma));
-	platform_shared_commit(channel, sizeof(*channel));
 }
 
 static inline bool dma_is_scheduling_source(struct dma_chan_data *channel)
 {
 	bool ret = channel->is_scheduling_source;
-
-	platform_shared_commit(channel, sizeof(*channel));
 
 	return ret;
 }

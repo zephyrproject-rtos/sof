@@ -6,7 +6,9 @@
 //         Keyon Jie <yang.jie@linux.intel.com>
 
 #include <sof/drivers/interrupt.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/driver.h>
+#include <sof/ipc/msg.h>
+#include <sof/ipc/schedule.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/dma.h>
 #include <sof/lib/mailbox.h>
@@ -73,17 +75,24 @@ static void irq_handler(void *arg)
 	}
 }
 
+int ipc_platform_compact_write_msg(ipc_cmd_hdr *hdr, int words)
+{
+	return 0; /* number of words read - not currently used on this platform */
+}
+
+int ipc_platform_compact_read_msg(ipc_cmd_hdr *hdr, int words)
+{
+	return 0; /* number of words read - not currently used on this platform */
+}
+
 enum task_state ipc_platform_do_cmd(void *data)
 {
-	struct ipc *ipc = ipc_get();
-	struct sof_ipc_cmd_hdr *hdr;
+	ipc_cmd_hdr *hdr;
 	/* Use struct ipc_data *iipc = ipc_get_drvdata(ipc); if needed */
 
 	/* perform command */
 	hdr = mailbox_validate();
 	ipc_cmd(hdr);
-
-	platform_shared_commit(ipc, sizeof(*ipc));
 
 	return SOF_TASK_STATE_COMPLETED;
 }
@@ -125,10 +134,7 @@ int ipc_platform_send_msg(struct ipc_msg *msg)
 	shim_write(SHIM_IPCDL, msg->header);
 	shim_write(SHIM_IPCDH, SHIM_IPCDH_BUSY);
 
-	platform_shared_commit(msg, sizeof(*msg));
-
 out:
-	platform_shared_commit(ipc, sizeof(*ipc));
 
 	return ret;
 }
@@ -136,8 +142,6 @@ out:
 struct ipc_data_host_buffer *ipc_platform_get_host_buffer(struct ipc *ipc)
 {
 	struct ipc_data *iipc = ipc_get_drvdata(ipc);
-
-	platform_shared_commit(ipc, sizeof(*ipc));
 
 	return &iipc->dh_buffer;
 }
@@ -179,8 +183,6 @@ int platform_ipc_init(struct ipc *ipc)
 	imrd = shim_read(SHIM_IMRD);
 	imrd &= ~(SHIM_IMRD_BUSY | SHIM_IMRD_DONE);
 	shim_write(SHIM_IMRD, imrd);
-
-	platform_shared_commit(ipc, sizeof(*ipc));
 
 	return 0;
 }
@@ -268,7 +270,6 @@ int ipc_platform_poll_tx_host_msg(struct ipc_msg *msg)
 	shim_write(SHIM_IPCDH, SHIM_IPCDH_BUSY);
 
 	/* message sent */
-	platform_shared_commit(msg, sizeof(*msg));
 	return 1;
 }
 

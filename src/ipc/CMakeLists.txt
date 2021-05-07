@@ -1,8 +1,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
+if (CONFIG_IPC_MAJOR_3)
+	add_local_sources(sof
+		handler-ipc3.c
+		helper-ipc3.c
+	)
+endif()
+
 add_local_sources(sof
-	ipc.c
-	handler.c
+	ipc-common.c
 )
 
 if (CONFIG_TRACE)

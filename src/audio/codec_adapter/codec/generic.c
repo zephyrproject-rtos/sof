@@ -12,7 +12,6 @@
  */
 
 #include <sof/audio/codec_adapter/codec/generic.h>
-#include <sof/audio/codec_adapter/interfaces.h>
 
 /*****************************************************************************/
 /* Local helper functions						     */
@@ -77,16 +76,12 @@ err:
 	return ret;
 }
 
-int codec_init(struct comp_dev *dev)
+int codec_init(struct comp_dev *dev, struct codec_interface *interface)
 {
 	int ret;
 	struct comp_data *cd = comp_get_drvdata(dev);
 	uint32_t codec_id = cd->ca_config.codec_id;
-	uint32_t interface_id = CODEC_GET_INTERFACE_ID(codec_id);
 	struct codec_data *codec = &cd->codec;
-	struct codec_interface *interface = NULL;
-	uint32_t i;
-	uint32_t no_of_interfaces = ARRAY_SIZE(interfaces);
 
 	comp_info(dev, "codec_init() start");
 
@@ -97,19 +92,12 @@ int codec_init(struct comp_dev *dev)
 
 	codec->id = codec_id;
 
-	/* Find proper interface */
-	for (i = 0; i < no_of_interfaces; i++) {
-		if (interfaces[i].id == interface_id) {
-			interface = &interfaces[i];
-			break;
-		}
-	}
 	if (!interface) {
 		comp_err(dev, "codec_init(): could not find codec interface for codec id %x",
 			 codec_id);
 		ret = -EIO;
 		goto out;
-	} else if (!interface->init || !interface->prepare ||
+	} else if (!interface->init || !interface->prepare || !interface->init_process ||
 		   !interface->process || !interface->apply_config ||
 		   !interface->reset || !interface->free) {
 		comp_err(dev, "codec_init(): codec %x is missing mandatory interfaces",
@@ -181,10 +169,9 @@ int codec_free_memory(struct comp_dev *dev, void *ptr)
 	struct list_item *mem_list;
 	struct list_item *_mem_list;
 
-	if (!ptr) {
-		comp_err(dev, "codec_free_memory: error: NULL pointer passed.");
-		return -EINVAL;
-	}
+	if (!ptr)
+		return 0;
+
 	/* Find which container keeps this memory */
 	list_for_item_safe(mem_list, _mem_list, &cd->codec.memory.mem_list) {
 		mem = container_of(mem_list, struct codec_memory, mem_list);
@@ -217,7 +204,7 @@ int codec_prepare(struct comp_dev *dev)
 
 	comp_dbg(dev, "codec_prepare() start");
 
-	if (cd->codec.state == CODEC_PREPARED)
+	if (cd->codec.state == CODEC_IDLE)
 		return 0;
 	if (cd->codec.state < CODEC_INITIALIZED)
 		return -EPERM;
@@ -229,10 +216,6 @@ int codec_prepare(struct comp_dev *dev)
 		goto end;
 	}
 
-	codec->s_cfg.avail = false;
-	codec->r_cfg.avail = false;
-	codec->r_cfg.data = NULL;
-
 	/* After prepare is done we no longer need runtime configuration
 	 * as it has been applied during the procedure - it is safe to
 	 * free it.
@@ -240,9 +223,32 @@ int codec_prepare(struct comp_dev *dev)
 	if (codec->r_cfg.data)
 		rfree(codec->r_cfg.data);
 
-	codec->state = CODEC_PREPARED;
+	codec->s_cfg.avail = false;
+	codec->r_cfg.avail = false;
+	codec->r_cfg.data = NULL;
+
+	codec->state = CODEC_IDLE;
 	comp_dbg(dev, "codec_prepare() done");
 end:
+	return ret;
+}
+
+int codec_init_process(struct comp_dev *dev)
+{
+	int ret;
+	struct comp_data *cd = comp_get_drvdata(dev);
+	struct codec_data *codec = &cd->codec;
+
+	comp_dbg(dev, "codec_init_process() start");
+
+	ret = codec->ops->init_process(dev);
+	if (ret) {
+		comp_err(dev, "codec_init_process() error %x", ret);
+		goto out;
+	}
+
+	comp_dbg(dev, "codec_init_process() done");
+out:
 	return ret;
 }
 
@@ -255,7 +261,7 @@ int codec_process(struct comp_dev *dev)
 
 	comp_dbg(dev, "codec_process() start");
 
-	if (cd->codec.state < CODEC_PREPARED) {
+	if (cd->codec.state != CODEC_IDLE) {
 		comp_err(dev, "codec_prepare(): wrong state of codec %x, state %d",
 			 cd->ca_config.codec_id, codec->state);
 		return -EPERM;
@@ -270,7 +276,21 @@ int codec_process(struct comp_dev *dev)
 
 	comp_dbg(dev, "codec_process() done");
 out:
+	codec->state = CODEC_IDLE;
 	return ret;
+}
+
+int codec_get_samples(struct comp_dev *dev)
+{
+	struct comp_data *cd = comp_get_drvdata(dev);
+	struct codec_data *codec = &cd->codec;
+
+	comp_dbg(dev, "codec_get_samples()");
+
+	if (codec->ops->get_samples)
+		return codec->ops->get_samples(dev);
+
+	return 0;
 }
 
 int codec_apply_runtime_config(struct comp_dev *dev)
@@ -281,12 +301,6 @@ int codec_apply_runtime_config(struct comp_dev *dev)
 	struct codec_data *codec = &cd->codec;
 
 	comp_dbg(dev, "codec_apply_config() start");
-
-	if (cd->codec.state < CODEC_PREPARED) {
-		comp_err(dev, "codec_prepare() wrong state of codec %x, state %d",
-			 cd->ca_config.codec_id, codec->state);
-		return -EPERM;
-	}
 
 	ret = codec->ops->apply_config(dev);
 	if (ret) {

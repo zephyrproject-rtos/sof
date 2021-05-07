@@ -13,7 +13,7 @@
 #include <sof/audio/src/src.h>
 #include <sof/audio/src/src_config.h>
 #include <sof/debug/panic.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/memory.h>
 #include <sof/lib/uuid.h>
@@ -666,7 +666,7 @@ static int src_ctrl_cmd(struct comp_dev *dev, struct sof_ipc_ctrl_data *cdata)
 static int src_cmd(struct comp_dev *dev, int cmd, void *data,
 		   int max_data_size)
 {
-	struct sof_ipc_ctrl_data *cdata = data;
+	struct sof_ipc_ctrl_data *cdata = ASSUME_ALIGNED(data, 4);
 	int ret = 0;
 
 	comp_info(dev, "src_cmd()");

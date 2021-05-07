@@ -192,11 +192,55 @@ define(`DAI_CONFIG',
 `ifelse(`$#', `5', `DO_DAI_CONFIG($1, $2, $3, $4, $5)', `$#', `4', `DO_DAI_CONFIG($1, $2, $3, $4)', `fatal_error(`Invalid parameters ($#) to DAI_CONFIG')')'
 )
 
+define(`HW_CONFIG_NAMES',
+`	hw_configs ['
+`	$1'
+`	]')
+
+define(`DAI_DATA_NAMES',
+`	data ['
+`	$1'
+`		"N_DAI_CONFIG_data_common"')
+
+dnl DO_MULTI_DAI_CONFIG(type, idx, link_id, name, sai_config/esai_config/ssp_config/dmic_config)
+define(`DO_MULTI_DAI_CONFIG',
+`$5'
+`SectionVendorTuples."N_DAI_CONFIG_tuples_common" {'
+`	tokens "sof_dai_tokens"'
+`	tuples."string" {'
+`		SOF_TKN_DAI_TYPE'		STR($1)
+`	}'
+`	tuples."word" {'
+`		SOF_TKN_DAI_INDEX'		STR($2)
+`	}'
+`}'
+`SectionData."N_DAI_CONFIG_data_common" {'
+`	tuples "N_DAI_CONFIG_tuples_common"'
+`}'
+`'
+`SectionBE."'$4`" {'
+`	id "'$3`"'
+`	index "0"'
+`	default_hw_conf_id	"'$3`"'
+`'
+`	$6'
+`	$7'
+`ifelse($1, `DMIC',`		"'N_DAI_CONFIG($1$2)`_pdm_data"', `')'
+`	]'
+`}'
+`DEBUG_DAI_CONFIG($1, $3)'
+)
+
+dnl MULTI_DAI_CONFIG(type, idx, link_id, name, ssp_config/dmic_config times n)
+ define(`MULTI_DAI_CONFIG',
+`ifelse(`eval($# < 5)', `1', `fatal_error(`Invalid parameters ($#) to MULTI_DAI_CONFIG')', `DO_MULTI_DAI_CONFIG($@)')'
+)
+
 dnl DAI_ADD(pipeline,
 dnl     pipe id, dai type, dai_index, dai_be,
 dnl     buffer, periods, format,
 dnl     period , priority, core, time_domain,
-dnl     channels, rate)
+dnl     channels, rate, dynamic_pipe)
 define(`DAI_ADD',
 `undefine(`PIPELINE_ID')'
 `undefine(`DAI_TYPE')'
@@ -211,6 +255,7 @@ define(`DAI_ADD',
 `undefine(`SCHEDULE_TIME_DOMAIN')'
 `undefine(`DAI_CHANNELS')'
 `undefine(`DAI_RATE')'
+`undefine(`DYNAMIC_PIPE')'
 `define(`PIPELINE_ID', $2)'
 `define(`DAI_TYPE', STR($3))'
 `define(`DAI_INDEX', STR($4))'
@@ -225,6 +270,7 @@ define(`DAI_ADD',
 `define(`SCHEDULE_TIME_DOMAIN', $12)'
 `define(`DAI_CHANNELS', $13)'
 `define(`DAI_RATE', $14)'
+`define(`DYNAMIC_PIPE', $15)'
 `include($1)'
 `DEBUG_DAI($3, $4)'
 )

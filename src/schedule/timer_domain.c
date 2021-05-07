@@ -8,6 +8,7 @@
 #include <sof/lib/alloc.h>
 #include <sof/lib/cpu.h>
 #include <sof/lib/memory.h>
+#include <sof/math/numbers.h>
 #include <sof/platform.h>
 #include <sof/schedule/ll_schedule.h>
 #include <sof/schedule/ll_schedule_domain.h>
@@ -29,7 +30,7 @@
  * SOF on Intel CAVS platforms currently only aligns with Zephyr when both
  * use the CAVS 19.2 MHz SSP clock. TODO - needs runtime alignment.
  */
-#if CONFIG_XTENSA && !CONFIG_CAVS_TIMER
+#if CONFIG_XTENSA && CONFIG_CAVS && !CONFIG_CAVS_TIMER
 #error "Zephyr uses 19.2MHz clock derived from SSP which must be enabled."
 #endif
 
@@ -53,6 +54,8 @@ K_THREAD_STACK_DEFINE(ll_workq_stack3, ZEPHYR_LL_WORKQ_SIZE);
 #endif
 #endif
 
+#define LL_TIMER_SET_OVERHEAD_TICKS  1000 /* overhead/delay to set the tick, in ticks */
+
 struct timer_domain {
 #ifdef __ZEPHYR__
 	struct k_work_q ll_workq[CONFIG_CORE_COUNT];
@@ -60,7 +63,7 @@ struct timer_domain {
 #endif
 	struct timer *timer;
 	void *arg[CONFIG_CORE_COUNT];
-	uint64_t timeout; /* in microseconds */
+	uint64_t timeout; /* in ticks */
 };
 
 #ifdef __ZEPHYR__
@@ -116,6 +119,7 @@ static int timer_domain_register(struct ll_schedule_domain *domain,
 #ifdef __ZEPHYR__
 	void *stack;
 	char *qname;
+	struct k_thread *thread;
 #endif
 
 	tr_dbg(&ll_tr, "timer_domain_register()");
@@ -158,7 +162,17 @@ static int timer_domain_register(struct ll_schedule_domain *domain,
 	zdata[core].arg = arg;
 	k_work_q_start(&timer_domain->ll_workq[core], stack,
 		       ZEPHYR_LL_WORKQ_SIZE, -CONFIG_NUM_COOP_PRIORITIES);
-	k_thread_name_set(&timer_domain->ll_workq[core].thread, qname);
+
+	thread = &timer_domain->ll_workq[core].thread;
+
+	k_thread_suspend(thread);
+
+	k_thread_cpu_mask_clear(thread);
+	k_thread_cpu_mask_enable(thread, core);
+	k_thread_name_set(thread, qname);
+
+	k_thread_resume(thread);
+
 	timer_domain->ll_workq_registered[core] = 1;
 
 	k_delayed_work_init(&zdata[core].work, timer_z_handler);
@@ -175,7 +189,6 @@ static int timer_domain_register(struct ll_schedule_domain *domain,
 	tr_info(&ll_tr, "timer_domain_register domain->type %d domain->clk %d domain->ticks_per_ms %d period %d",
 		domain->type, domain->clk, domain->ticks_per_ms, (uint32_t)period);
 out:
-	platform_shared_commit(timer_domain, sizeof(*timer_domain));
 
 	return ret;
 }
@@ -190,7 +203,7 @@ static void timer_domain_unregister(struct ll_schedule_domain *domain,
 
 	/* tasks still registered on this core */
 	if (!timer_domain->arg[core] || num_tasks)
-		goto out;
+		return;
 
 	tr_info(&ll_tr, "timer_domain_unregister domain->type %d domain->clk %d",
 		domain->type, domain->clk);
@@ -198,9 +211,6 @@ static void timer_domain_unregister(struct ll_schedule_domain *domain,
 	timer_unregister(timer_domain->timer, timer_domain->arg[core]);
 #endif
 	timer_domain->arg[core] = NULL;
-
-out:
-	platform_shared_commit(timer_domain, sizeof(*timer_domain));
 }
 
 static void timer_domain_enable(struct ll_schedule_domain *domain, int core)
@@ -210,7 +220,6 @@ static void timer_domain_enable(struct ll_schedule_domain *domain, int core)
 
 	timer_enable(timer_domain->timer, timer_domain->arg[core], core);
 
-	platform_shared_commit(timer_domain, sizeof(*timer_domain));
 #endif
 }
 
@@ -221,24 +230,24 @@ static void timer_domain_disable(struct ll_schedule_domain *domain, int core)
 
 	timer_disable(timer_domain->timer, timer_domain->arg[core], core);
 
-	platform_shared_commit(timer_domain, sizeof(*timer_domain));
 #endif
 }
 
 static void timer_domain_set(struct ll_schedule_domain *domain, uint64_t start)
 {
 	struct timer_domain *timer_domain = ll_sch_domain_get_pdata(domain);
-	uint64_t ticks_tout = domain->ticks_per_ms * timer_domain->timeout /
-			     1000;
+	uint64_t ticks_tout = timer_domain->timeout;
 	uint64_t ticks_set;
 #ifndef __ZEPHYR__
-	uint64_t ticks_req = start + ticks_tout;
+	/* make sure to require for ticks later than tout from now */
+	const uint64_t time = platform_timer_get_atomic(timer_domain->timer);
+	const uint64_t ticks_req = MAX(start, time + ticks_tout);
 
 	ticks_set = platform_timer_set(timer_domain->timer, ticks_req);
 #else
-	uint64_t current = platform_timer_get(timer_domain->timer);
+	uint64_t current = platform_timer_get_atomic(timer_domain->timer);
 	uint64_t earliest_next = current + 1 + ZEPHYR_SCHED_COST;
-	uint64_t ticks_req = domain->last_tick ? start + ticks_tout :
+	uint64_t ticks_req = domain->next_tick ? start + ticks_tout :
 		MAX(start, earliest_next);
 	int ret, core = cpu_get_id();
 	uint64_t ticks_delta;
@@ -276,6 +285,10 @@ static void timer_domain_set(struct ll_schedule_domain *domain, uint64_t start)
 		current - current % CYC_PER_TICK;
 #endif
 
+	tr_dbg(&ll_tr, "timer_domain_set(): ticks_set %u ticks_req %u current %u",
+	       (unsigned int)ticks_set, (unsigned int)ticks_req,
+	       (unsigned int)platform_timer_get_atomic(timer_get()));
+
 	/* Was timer set to the value we requested? If no it means some
 	 * delay occurred and we should report that in error log.
 	 */
@@ -283,9 +296,8 @@ static void timer_domain_set(struct ll_schedule_domain *domain, uint64_t start)
 		timer_report_delay(timer_domain->timer->id,
 				   ticks_set - ticks_req);
 
-	domain->last_tick = ticks_set;
+	domain->next_tick = ticks_set;
 
-	platform_shared_commit(timer_domain, sizeof(*timer_domain));
 }
 
 static void timer_domain_clear(struct ll_schedule_domain *domain)
@@ -295,39 +307,28 @@ static void timer_domain_clear(struct ll_schedule_domain *domain)
 
 	platform_timer_clear(timer_domain->timer);
 
-	platform_shared_commit(timer_domain, sizeof(*timer_domain));
 #endif
 }
 
 static bool timer_domain_is_pending(struct ll_schedule_domain *domain,
 				    struct task *task, struct comp_dev **comp)
 {
-	return task->start <= platform_timer_get(timer_get());
+	return task->start <= platform_timer_get_atomic(timer_get());
 }
 
-struct ll_schedule_domain *timer_domain_init(struct timer *timer, int clk,
-					     uint64_t timeout)
+struct ll_schedule_domain *timer_domain_init(struct timer *timer, int clk)
 {
 	struct ll_schedule_domain *domain;
 	struct timer_domain *timer_domain;
-
-	if (timeout <= UINT_MAX)
-		tr_info(&ll_tr, "timer_domain_init clk %d timeout %u", clk,
-			(unsigned int)timeout);
-	else
-		tr_info(&ll_tr, "timer_domain_init clk %d timeout > %u", clk, UINT_MAX);
 
 	domain = domain_init(SOF_SCHEDULE_LL_TIMER, clk, false,
 			     &timer_domain_ops);
 
 	timer_domain = rzalloc(SOF_MEM_ZONE_SYS_SHARED, 0, SOF_MEM_CAPS_RAM, sizeof(*timer_domain));
 	timer_domain->timer = timer;
-	timer_domain->timeout = timeout;
+	timer_domain->timeout = LL_TIMER_SET_OVERHEAD_TICKS;
 
 	ll_sch_domain_set_pdata(domain, timer_domain);
-
-	platform_shared_commit(domain, sizeof(*domain));
-	platform_shared_commit(timer_domain, sizeof(*timer_domain));
 
 	return domain;
 }

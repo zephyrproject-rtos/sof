@@ -12,7 +12,6 @@
 #include <sof/sof.h>
 #include <sof/spinlock.h>
 
-
 const struct dw_drv_plat_data dmac0 = {
 	.chan[0] = {
 		.class	= 6,
@@ -186,8 +185,6 @@ int dmac_init(struct sof *sof)
 	/* early lock initialization for ref counting */
 	for (i = 0; i < ARRAY_SIZE(dma); i++)
 		spinlock_init(&dma[i].lock);
-
-	platform_shared_commit(dma, sizeof(*dma));
 
 	sof->dma_info = &lib_dma;
 

@@ -18,7 +18,7 @@
 #include <stdint.h>
 
 /** \brief Minimum number of timer recovery cycles in case of delay. */
-#define TIMER_MIN_RECOVER_CYCLES	100
+#define TIMER_MIN_RECOVER_CYCLES	240	/* ~10us at 24.576MHz */
 
 void platform_timer_start(struct timer *timer)
 {
@@ -38,19 +38,34 @@ void platform_timer_stop(struct timer *timer)
 
 int64_t platform_timer_set(struct timer *timer, uint64_t ticks)
 {
+	uint64_t ticks_now;
+	uint32_t flags;
+
 	/* a tick value of 0 will not generate an IRQ */
 	if (ticks == 0)
 		ticks = 1;
 
-	/* Check if requested time is not past time */
-	if (ticks > shim_read64(SHIM_DSPWC))
+	irq_local_disable(flags);
+
+	ticks_now = platform_timer_get(timer);
+
+	/* Check if requested time is not past time and include the
+	 * overhead of changing the timer
+	 */
+	if (ticks > ticks_now + TIMER_MIN_RECOVER_CYCLES) {
 		shim_write64(SHIM_DSPWCT0C, ticks);
-	else
-		shim_write64(SHIM_DSPWCT0C, shim_read64(SHIM_DSPWC) +
-			     TIMER_MIN_RECOVER_CYCLES);
+	} else {
+		ticks = ticks_now + TIMER_MIN_RECOVER_CYCLES;
+		if (ticks == 0)
+			ticks = 1;
+
+		shim_write64(SHIM_DSPWCT0C, ticks);
+	}
 
 	/* Enable IRQ */
 	shim_write(SHIM_DSPWCTCS, SHIM_DSPWCTCS_T0A);
+
+	irq_local_enable(flags);
 
 	return shim_read64(SHIM_DSPWCT0C);
 }
@@ -63,8 +78,39 @@ void platform_timer_clear(struct timer *timer)
 
 uint64_t platform_timer_get(struct timer *timer)
 {
-//	return arch_timer_get_system(timer);
-	return (uint64_t)shim_read64(SHIM_DSPWC);
+	uint32_t hi0;
+	uint32_t hi1;
+	uint32_t lo;
+	uint64_t ticks_now;
+
+	/* 64bit reads are non atomic on xtensa so we must
+	 * read a stable value where there is no bit 32 flipping.
+	 * A large delta between reads[0..1] means we have flipped
+	 * and that the value read back in either 0..1] is invalid.
+	 */
+	do {
+		hi0 = shim_read(SHIM_DSPWCH);
+		lo = shim_read(SHIM_DSPWCL);
+		hi1 = shim_read(SHIM_DSPWCH);
+
+		/* worst case is we perform this twice so 6 * 32b clock reads */
+	} while (hi0 != hi1);
+
+	ticks_now = (((uint64_t)hi0) << 32) | lo;
+
+	return ticks_now;
+}
+
+uint64_t platform_timer_get_atomic(struct timer *timer)
+{
+	uint32_t flags;
+	uint64_t ticks_now;
+
+	irq_local_disable(flags);
+	ticks_now = platform_timer_get(timer);
+	irq_local_enable(flags);
+
+	return ticks_now;
 }
 
 /* get timestamp for host stream DMA position */
@@ -146,8 +192,6 @@ int timer_register(struct timer *timer, void (*handler)(void *arg), void *arg)
 		break;
 	}
 
-	platform_shared_commit(timer, sizeof(*timer));
-
 	return ret;
 }
 
@@ -174,7 +218,6 @@ void timer_unregister(struct timer *timer, void *arg)
 		break;
 	}
 
-	platform_shared_commit(timer, sizeof(*timer));
 }
 
 void timer_enable(struct timer *timer, void *arg, int core)
@@ -191,7 +234,6 @@ void timer_enable(struct timer *timer, void *arg, int core)
 		break;
 	}
 
-	platform_shared_commit(timer, sizeof(*timer));
 }
 
 void timer_disable(struct timer *timer, void *arg, int core)
@@ -208,5 +250,4 @@ void timer_disable(struct timer *timer, void *arg, int core)
 		break;
 	}
 
-	platform_shared_commit(timer, sizeof(*timer));
 }

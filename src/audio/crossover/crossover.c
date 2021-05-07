@@ -13,7 +13,7 @@
 #include <sof/audio/eq_iir/iir.h>
 #include <sof/common.h>
 #include <sof/debug/panic.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/msg.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/memory.h>
 #include <sof/lib/uuid.h>
@@ -223,7 +223,7 @@ int crossover_init_coef_ch(struct sof_eq_iir_biquad_df2t *coef,
 	int32_t i;
 	int32_t j = 0;
 	int32_t num_lr4s = num_sinks == CROSSOVER_2WAY_NUM_SINKS ? 1 : 3;
-	int err = 0;
+	int err;
 
 	for (i = 0; i < num_lr4s; i++) {
 		/* Get the low pass coefficients */
@@ -590,7 +590,7 @@ static int crossover_cmd_get_data(struct comp_dev *dev,
 static int crossover_cmd(struct comp_dev *dev, int cmd, void *data,
 			 int max_data_size)
 {
-	struct sof_ipc_ctrl_data *cdata = data;
+	struct sof_ipc_ctrl_data *cdata = ASSUME_ALIGNED(data, 4);
 	int ret = 0;
 
 	comp_info(dev, "crossover_cmd()");

@@ -15,11 +15,18 @@
 
 #define LIB_NAME_MAX_LEN 30
 #define LIB_NO_ERROR XA_NO_ERROR
+#define LIB_IS_FATAL_ERROR(e) ((e) & XA_FATAL_ERROR)
 
 /*****************************************************************************/
 /* Cadence API functions							     */
 /*****************************************************************************/
 extern xa_codec_func_t cadence_api_function;
+extern xa_codec_func_t xa_aac_dec;
+extern xa_codec_func_t xa_bsac_dec;
+extern xa_codec_func_t xa_dabplus_dec;
+extern xa_codec_func_t xa_drm_dec;
+extern xa_codec_func_t xa_mp3_dec;
+extern xa_codec_func_t xa_sbc_dec;
 
 /*****************************************************************************/
 /* Cadence private data types						     */
@@ -41,6 +48,8 @@ struct cadence_codec_data {
 /*****************************************************************************/
 int cadence_codec_init(struct comp_dev *dev);
 int cadence_codec_prepare(struct comp_dev *dev);
+int cadence_codec_get_samples(struct comp_dev *dev);
+int cadence_codec_init_process(struct comp_dev *dev);
 int cadence_codec_process(struct comp_dev *dev);
 int cadence_codec_apply_config(struct comp_dev *dev);
 int cadence_codec_reset(struct comp_dev *dev);

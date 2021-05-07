@@ -8,7 +8,7 @@
 #include <sof/debug/debug.h>
 #include <sof/drivers/edma.h>
 #include <sof/drivers/interrupt.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/driver.h>
 #include <sof/drivers/mu.h>
 #include <sof/drivers/timer.h>
 #include <sof/fw-ready-metadata.h>
@@ -158,8 +158,7 @@ int platform_init(struct sof *sof)
 
 	/* init low latency domains and schedulers */
 	sof->platform_timer_domain =
-		timer_domain_init(sof->platform_timer, PLATFORM_DEFAULT_CLOCK,
-				  CONFIG_SYSTICK_PERIOD);
+		timer_domain_init(sof->platform_timer, PLATFORM_DEFAULT_CLOCK);
 	scheduler_init_ll(sof->platform_timer_domain);
 
 	platform_timer_start(sof->platform_timer);
@@ -176,6 +175,9 @@ int platform_init(struct sof *sof)
 	sof->platform_dma_domain = dma_multi_chan_domain_init
 			(&sof->dma_info->dma_array[0], 1,
 			 PLATFORM_DEFAULT_CLOCK, false);
+
+	/* i.MX platform DMA domain will be full synchronous, no time dependent */
+	sof->platform_dma_domain->full_sync = true;
 	scheduler_init_ll(sof->platform_dma_domain);
 
 	/* initialize the host IPC mechanims */

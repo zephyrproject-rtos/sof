@@ -5,7 +5,9 @@
  * Author: Liam Girdwood <liam.r.girdwood@linux.intel.com>
  */
 
+#include <sof/init.h>
 #include <sof/lib/alloc.h>
+#include <sof/drivers/idc.h>
 #include <sof/drivers/interrupt.h>
 #include <sof/drivers/interrupt-map.h>
 #include <sof/lib/dma.h>
@@ -14,6 +16,7 @@
 #include <platform/lib/memory.h>
 #include <sof/platform.h>
 #include <sof/lib/notifier.h>
+#include <sof/lib/pm_runtime.h>
 #include <sof/audio/pipeline.h>
 #include <sof/audio/component_ext.h>
 #include <sof/trace/trace.h>
@@ -23,10 +26,14 @@
 #include <soc.h>
 #include <kernel.h>
 
-/* Confirm Zephyr config settings - TODO: Use ASSERT */
-#if !CONFIG_DYNAMIC_INTERRUPTS
-#error Define CONFIG_DYNAMIC_INTERRUPTS
-#endif
+extern K_KERNEL_STACK_ARRAY_DEFINE(z_interrupt_stacks, CONFIG_MP_NUM_CPUS,
+				   CONFIG_ISR_STACK_SIZE);
+
+/* 300aaad4-45d2-8313-25d0-5e1d6086cdd1 */
+DECLARE_SOF_RT_UUID("zephyr", zephyr_uuid, 0x300aaad4, 0x45d2, 0x8313,
+		 0x25, 0xd0, 0x5e, 0x1d, 0x60, 0x86, 0xcd, 0xd1);
+
+DECLARE_TR_CTX(zephyr_tr, SOF_UUID(zephyr_uuid), LOG_LEVEL_INFO);
 
 /*
  * Memory - Create Zephyr HEAP for SOF.
@@ -102,7 +109,7 @@ void *rbrealloc_align(void *ptr, uint32_t flags, uint32_t caps, size_t bytes,
 	/* Original version returns NULL without freeing this memory */
 	if (!bytes) {
 		/* TODO: Should we call rfree(ptr); */
-		LOG_ERR("realloc failed for %d bytes", bytes);
+		tr_err(&zephyr_tr, "realloc failed for 0 bytes");
 		return NULL;
 	}
 
@@ -117,7 +124,7 @@ void *rbrealloc_align(void *ptr, uint32_t flags, uint32_t caps, size_t bytes,
 
 	rfree(ptr);
 
-	LOG_INF("rbealloc: new ptr %p", new_ptr);
+	tr_info(&zephyr_tr, "rbealloc: new ptr %p", new_ptr);
 
 	return new_ptr;
 }
@@ -198,8 +205,14 @@ int interrupt_get_irq(unsigned int irq, const char *cascade)
 
 int interrupt_register(uint32_t irq, void(*handler)(void *arg), void *arg)
 {
+#ifdef CONFIG_DYNAMIC_INTERRUPTS
 	return arch_irq_connect_dynamic(irq, 0, (void (*)(const void *))handler,
 					arg, 0);
+#else
+	tr_err(&zephyr_tr, "Cannot register handler for IRQ %u: dynamic IRQs are disabled",
+		irq);
+	return -EOPNOTSUPP;
+#endif
 }
 
 #if !CONFIG_LIBRARY
@@ -277,10 +290,12 @@ uint64_t platform_timer_get(struct timer *timer)
 	uint32_t high;
 	uint64_t time;
 
-	/* read low 32 bits */
-	low = shim_read(SHIM_EXT_TIMER_STAT);
-	/* TODO: check and see whether 32bit IRQ is pending for timer */
-	high = timer->hitime;
+	do {
+		/* TODO: check and see whether 32bit IRQ is pending for timer */
+		high = timer->hitime;
+		/* read low 32 bits */
+		low = shim_read(SHIM_EXT_TIMER_STAT);
+	} while (high != timer->hitime);
 
 	time = ((uint64_t)high << 32) | low;
 
@@ -294,22 +309,31 @@ uint64_t platform_timer_get(struct timer *timer)
 #endif
 }
 
+uint64_t platform_timer_get_atomic(struct timer *timer)
+{
+	uint32_t flags;
+	uint64_t ticks_now;
+
+	irq_local_disable(flags);
+	ticks_now = platform_timer_get(timer);
+	irq_local_enable(flags);
+
+	return ticks_now;
+}
+
 /*
  * Notifier.
  *
- * Use SOF inter component messaging today. Zephy has similar APIs that will
+ * Use SOF inter component messaging today. Zephyr has similar APIs that will
  * need some minor feature updates prior to merge. i.e. FW to host messages.
  * TODO: align with Zephyr API when ready.
  */
 
-static struct notify *host_notify;
+static struct notify *host_notify[CONFIG_CORE_COUNT];
 
 struct notify **arch_notify_get(void)
 {
-	if (!host_notify)
-		host_notify = rzalloc(SOF_MEM_ZONE_SYS, 0, SOF_MEM_CAPS_RAM,
-				      sizeof(*host_notify));
-	return &host_notify;
+	return host_notify + cpu_get_id();
 }
 
 /*
@@ -373,6 +397,8 @@ void sys_comp_keyword_init(void);
 void sys_comp_asrc_init(void);
 void sys_comp_dcblock_init(void);
 void sys_comp_eq_iir_init(void);
+void sys_comp_kpb_init(void);
+void sys_comp_smart_amp_init(void);
 
 int task_main_start(struct sof *sof)
 {
@@ -425,6 +451,14 @@ int task_main_start(struct sof *sof)
 
 	if (IS_ENABLED(CONFIG_SAMPLE_KEYPHRASE)) {
 		sys_comp_keyword_init();
+	}
+
+	if (IS_ENABLED(CONFIG_COMP_KPB)) {
+		sys_comp_kpb_init();
+	}
+
+	if (IS_ENABLED(CONFIG_SAMPLE_SMART_AMP)) {
+		sys_comp_smart_amp_init();
 	}
 
 	if (IS_ENABLED(CONFIG_COMP_ASRC)) {
@@ -494,10 +528,39 @@ void platform_dai_wallclock(struct comp_dev *dai, uint64_t *wallclock)
  *
  * Mostly empty today waiting pending Zephyr CAVS SMP integration.
  */
-#if CONFIG_MULTICORE
+#if CONFIG_MULTICORE && CONFIG_SMP
+static atomic_t start_flag;
+
+static FUNC_NORETURN void secondary_init(void *arg)
+{
+	struct k_thread dummy_thread;
+
+	z_smp_thread_init(arg, &dummy_thread);
+	secondary_core_init(sof_get());
+
+#ifdef CONFIG_THREAD_STACK_INFO
+	dummy_thread.stack_info.start = (uintptr_t)z_interrupt_stacks +
+		arch_curr_cpu()->id * Z_KERNEL_STACK_LEN(CONFIG_ISR_STACK_SIZE);
+	dummy_thread.stack_info.size = Z_KERNEL_STACK_LEN(CONFIG_ISR_STACK_SIZE);
+#endif
+
+	z_smp_thread_swap();
+
+	CODE_UNREACHABLE; /* LCOV_EXCL_LINE */
+}
+
 int arch_cpu_enable_core(int id)
 {
-	/* TODO: call Zephyr API */
+	atomic_clear(&start_flag);
+
+	/* Power up secondary core */
+	pm_runtime_get(PM_RUNTIME_DSP, PWRD_BY_TPLG | id);
+
+	arch_start_cpu(id, z_interrupt_stacks[id], CONFIG_ISR_STACK_SIZE,
+		       secondary_init, &start_flag);
+
+	atomic_set(&start_flag, 1);
+
 	return 0;
 }
 
@@ -508,8 +571,7 @@ void arch_cpu_disable_core(int id)
 
 int arch_cpu_is_core_enabled(int id)
 {
-	/* TODO: call Zephyr API */
-	return 1;
+	return arch_cpu_active(id);
 }
 
 void cpu_power_down_core(void)
@@ -519,28 +581,26 @@ void cpu_power_down_core(void)
 
 int arch_cpu_enabled_cores(void)
 {
-	/* TODO: use zephyr version to get number of running cores */
-	return 1;
+	unsigned int i;
+	int mask = 0;
+
+	for (i = 0; i < CONFIG_MP_NUM_CPUS; i++)
+		if (arch_cpu_active(i))
+			mask |= BIT(i);
+
+	return mask;
 }
 
-struct idc;
+static struct idc idc[CONFIG_MP_NUM_CPUS];
+static struct idc *p_idc[CONFIG_MP_NUM_CPUS];
+
 struct idc **idc_get(void)
 {
-	/* TODO: this should return per core data */
-	return NULL;
+	int cpu = cpu_get_id();
+
+	p_idc[cpu] = idc + cpu;
+
+	return p_idc + cpu;
 }
 #endif
 
-#if CONFIG_LIBRARY
-/* Dummies for unsupported architectures */
-
-/* Platform */
-int platform_boot_complete(uint32_t boot_message)
-{
-	return 0;
-}
-
-/* Logging */
-const struct log_source_const_data log_const_sof;
-
-#endif

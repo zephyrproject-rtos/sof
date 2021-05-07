@@ -10,8 +10,6 @@
 #ifndef __PLATFORM_LIB_MEMORY_H__
 #define __PLATFORM_LIB_MEMORY_H__
 
-
-
 #if !defined(__ASSEMBLER__) && !defined(LINKER)
 
 struct sof;
@@ -36,7 +34,6 @@ static inline void *platform_shared_get(void *ptr, int bytes)
  * or dynamically allocated with SOF_MEM_FLAG_SHARED flag.
  * Does nothing, since HSW doesn't support SMP.
  */
-static inline void platform_shared_commit(void *ptr, int bytes) { }
 
 static inline void *platform_rfree_prepare(void *ptr)
 {
@@ -119,7 +116,6 @@ static inline void *platform_rfree_prepare(void *ptr)
  * | SOF_STACK_BASE      |                |                                   |
  * +---------------------+----------------+-----------------------------------+
  */
-
 
 /* Heap section sizes for module pool */
 #define HEAP_RT_COUNT8		0

@@ -17,9 +17,9 @@
  * Input depends on precision_x
  * Output range [0.5, 1); regulated to Q2.30
  */
-static inline int32_t rexp_fixed(int32_t x, int precision_x, int *e)
+static inline int32_t rexp_fixed(int32_t x, int32_t precision_x, int32_t *e)
 {
-	int bit = 31 - norm_int32(x);
+	int32_t bit = 31 - norm_int32(x);
 
 	*e = bit - precision_x;
 
@@ -49,7 +49,7 @@ static inline int32_t log10_fixed(int32_t x)
 	const int32_t A1 = Q_CONVERT_FLOAT(3.6505267620086669921875f, qc);
 	const int32_t A0 = Q_CONVERT_FLOAT(-1.217894077301025390625f, qc);
 	const int32_t LOG10_2 = Q_CONVERT_FLOAT(0.301029995663981195214f, qc);
-	int e;
+	int32_t e;
 	int32_t exp; /* Q31.1 */
 	int32_t x2, x4; /* Q2.30 */
 	int32_t A5Xx, A3Xx;
@@ -118,7 +118,7 @@ inline int32_t drc_sin_fixed(int32_t x)
 }
 
 /*
- * Input is Q2.30: (-2.0, 2.0)
+ * Input is Q2.30; valid range: [-1.0, 1.0]
  * Output range: [-1.0, 1.0]; regulated to Q2.30: (-2.0, 2.0)
  */
 inline int32_t drc_asin_fixed(int32_t x)
@@ -177,12 +177,16 @@ inline int32_t drc_asin_fixed(int32_t x)
 }
 
 /*
- * Input x is Q6.26: (-32.0, 32.0)
+ * Input x is Q6.26; valid range: (0.0, 32.0); x <= 0 is not supported
  *       y is Q2.30: (-2.0, 2.0)
  * Output is Q12.20: max 2048.0
  */
 inline int32_t drc_pow_fixed(int32_t x, int32_t y)
 {
+	/* Negative or zero input x is not supported, just return 0. */
+	if (x <= 0)
+		return 0;
+
 	/* x^y = expf(y * log(x)) */
 	return exp_fixed(q_mult(y, drc_log_fixed(x), 30, 26, 27));
 }
@@ -191,7 +195,7 @@ inline int32_t drc_pow_fixed(int32_t x, int32_t y)
  * Input depends on precision_x
  * Output depends on precision_y
  */
-inline int32_t drc_inv_fixed(int32_t x, int precision_x, int precision_y)
+inline int32_t drc_inv_fixed(int32_t x, int32_t precision_x, int32_t precision_y)
 {
 #define qc 25
 	/* Coefficients obtained from:
@@ -206,15 +210,16 @@ inline int32_t drc_inv_fixed(int32_t x, int precision_x, int precision_y)
 	const int32_t A2 = Q_CONVERT_FLOAT(33.57208251953125f, qc);
 	const int32_t A1 = Q_CONVERT_FLOAT(-21.25031280517578125f, qc);
 	const int32_t A0 = Q_CONVERT_FLOAT(7.152250766754150390625f, qc);
-	int e;
-	int sqrt2_extracted = 0;
+	int32_t e;
+	int32_t precision_inv;
+	int32_t sqrt2_extracted = 0;
 	int32_t x2, x4; /* Q2.30 */
 	int32_t A5Xx, A3Xx;
 	int32_t inv;
 
 	x = rexp_fixed(x, precision_x, &e); /* Q2.30 */
 
-	if (x < ONE_OVER_SQRT2) {
+	if (ABS(x) < ONE_OVER_SQRT2) {
 		x = q_mult(x, SQRT2, 30, 30, 30);
 		sqrt2_extracted = 1;
 	}
@@ -229,11 +234,11 @@ inline int32_t drc_inv_fixed(int32_t x, int precision_x, int precision_y)
 	if (sqrt2_extracted)
 		inv = q_mult(inv, SQRT2, qc, 30, qc);
 
-	e += qc;
-	if (e > precision_y)
-		return Q_SHIFT_RND(inv, e, precision_y);
-	if (e < precision_y)
-		return Q_SHIFT_LEFT(inv, e, precision_y);
+	precision_inv = e + qc;
+	if (precision_inv > precision_y)
+		return Q_SHIFT_RND(inv, precision_inv, precision_y);
+	if (precision_inv < precision_y)
+		return sat_int32(Q_SHIFT_LEFT((int64_t)inv, precision_inv, precision_y));
 	return inv;
 #undef qc
 }

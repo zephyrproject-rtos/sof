@@ -11,6 +11,29 @@ cmake_minimum_required(VERSION 3.10)
 
 set(VERSION_CMAKE_PATH ${CMAKE_CURRENT_LIST_DIR}/version.cmake)
 
+
+# In an ideal world, every CI engine records the most basic and most
+# important information:
+# - current date and time
+# - git version of the pull request
+# - git version of the moving branch it's being merged with
+#
+# In the real world, some CI results use a random timezone without
+# telling which one or don't provide any time at all.
+string(TIMESTAMP build_start_time UTC)
+message(STATUS "version.cmake starting SOF build at ${build_start_time} UTC")
+
+# Most CI engines test a temporary merge of the pull request with a
+# moving target: the latest target branch. In that case the SHA version
+# gathered by git describe is disposable hence useless. Only the
+# --parents SHA are useful.
+message(STATUS "Building git commit with parent(s):")
+# Note execute_process() failures are ignored by default (missing git...)
+execute_process(
+	COMMAND git log --parents --oneline --decorate -n 1 HEAD
+	)
+
+
 # Don't confuse this manual _input_ file with the other, output file of
 # the same name auto-generated in the top _build_ directory by "make
 # dist", see dist.cmake
@@ -23,23 +46,24 @@ if(EXISTS ${TARBALL_VERSION_SOURCE_PATH})
 	list(GET lines 1 GIT_LOG_HASH)
 	message(STATUS "Found ${TARBALL_VERSION_FILE_NAME}")
 else()
-	execute_process(COMMAND git describe --tags --abbrev=12 --match v*
+	# execute_process() errors are not fatal by default!
+	execute_process(
+	        COMMAND git describe --tags --abbrev=12 --match v* --dirty
 		WORKING_DIRECTORY ${SOF_ROOT_SOURCE_DIRECTORY}
 		OUTPUT_VARIABLE GIT_TAG
 		OUTPUT_STRIP_TRAILING_WHITESPACE
-		ERROR_QUIET
 	)
 
 	execute_process(COMMAND git log --pretty=format:%h -1
 		WORKING_DIRECTORY ${SOF_ROOT_SOURCE_DIRECTORY}
 		OUTPUT_VARIABLE GIT_LOG_HASH
 		OUTPUT_STRIP_TRAILING_WHITESPACE
-		ERROR_QUIET
 	)
 endif()
 
-# We have ERROR_QUIET above so git issues are not fatal
 if(NOT GIT_TAG MATCHES "^v")
+	message(WARNING
+	  "git describe found ${GIT_TAG} / nothing starting with 'v'. Shallow clone?")
 	set(GIT_TAG "v0.0-0-g0000")
 endif()
 

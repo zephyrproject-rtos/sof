@@ -20,6 +20,8 @@
 #include <tplg_parser/topology.h>
 #include <sof/lib/uuid.h>
 
+#define MOVE_POINTER_BY_BYTES(p, b) ((typeof(p))((uint8_t *)(p) + (b)))
+
 struct sof_process_types {
 	const char *name;
 	enum sof_ipc_process_type type;
@@ -154,7 +156,7 @@ int tplg_load_buffer(int comp_id, int pipeline_id, int size,
 	struct snd_soc_tplg_vendor_array *array;
 	size_t read_size;
 	size_t parsed_size = 0;
-	int ret = 0;
+	int ret;
 
 	/* configure buffer */
 	buffer->comp.core = 0;
@@ -230,7 +232,7 @@ int tplg_load_pcm(int comp_id, int pipeline_id, int size, int dir,
 {
 	struct snd_soc_tplg_vendor_array *array = NULL;
 	size_t total_array_size = 0, read_size;
-	int ret = 0;
+	int ret;
 
 	/* configure host comp IPC message */
 	host->comp.hdr.size = sizeof(*host);
@@ -268,7 +270,6 @@ int tplg_load_pcm(int comp_id, int pipeline_id, int size, int dir,
 			free(array);
 			return ret;
 		}
-
 
 		/* parse comp tokens */
 		ret = sof_parse_tokens(&host->config, comp_tokens,
@@ -377,7 +378,7 @@ int tplg_load_pga(int comp_id, int pipeline_id, int size,
 {
 	struct snd_soc_tplg_vendor_array *array = NULL;
 	size_t total_array_size = 0, read_size;
-	int ret = 0;
+	int ret;
 
 	/* allocate memory for vendor tuple array */
 	array = (struct snd_soc_tplg_vendor_array *)malloc(size);
@@ -451,7 +452,7 @@ int tplg_load_pipeline(int comp_id, int pipeline_id, int size,
 {
 	struct snd_soc_tplg_vendor_array *array = NULL;
 	size_t total_array_size = 0, read_size;
-	int ret = 0;
+	int ret;
 
 	/* configure pipeline */
 	pipeline->comp_id = comp_id;
@@ -473,21 +474,21 @@ int tplg_load_pipeline(int comp_id, int pipeline_id, int size,
 		read_size = sizeof(struct snd_soc_tplg_vendor_array);
 		ret = fread(array, read_size, 1, file);
 		if (ret != 1) {
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		/* check for array size mismatch */
 		if (!is_valid_priv_size(total_array_size, size, array)) {
 			fprintf(stderr, "error: load pipeline array size mismatch\n");
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		ret = tplg_read_array(array, file);
 		if (ret) {
 			fprintf(stderr, "error: read array fail\n");
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
@@ -498,18 +499,18 @@ int tplg_load_pipeline(int comp_id, int pipeline_id, int size,
 		if (ret != 0) {
 			fprintf(stderr, "error: parse pipeline tokens %d\n",
 				size);
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		total_array_size += array->size;
 
 		/* read next array */
-		array = (void *)array + array->size;
+		array = MOVE_POINTER_BY_BYTES(array, array->size);
 	}
 
 	/* point to the start of array so it gets freed properly */
-	array = (void *)array - total_array_size;
+	array = MOVE_POINTER_BY_BYTES(array, -total_array_size);
 
 	free(array);
 	return 0;
@@ -525,7 +526,7 @@ int tplg_load_one_control(struct snd_soc_tplg_ctl_hdr **ctl, char **priv_data,
 	size_t rewind_size;
 	size_t read_size;
 	size_t hdr_size;
-	int ret = 0;
+	int ret;
 
 	/* These are set if success */
 	*ctl = NULL;
@@ -556,7 +557,7 @@ int tplg_load_one_control(struct snd_soc_tplg_ctl_hdr **ctl, char **priv_data,
 	case SND_SOC_TPLG_DAPM_CTL_VOLSW:
 		/* load mixer type control */
 		rewind_size = sizeof(struct snd_soc_tplg_ctl_hdr);
-		if (fseek(file, rewind_size * -1, SEEK_CUR)) {
+		if (fseek(file, (long)rewind_size * -1, SEEK_CUR)) {
 			ret = -errno;
 			goto err;
 		}
@@ -591,7 +592,7 @@ int tplg_load_one_control(struct snd_soc_tplg_ctl_hdr **ctl, char **priv_data,
 	case SND_SOC_TPLG_DAPM_CTL_ENUM_VALUE:
 		/* load enum type control */
 		rewind_size = sizeof(struct snd_soc_tplg_ctl_hdr);
-		if (fseek(file, rewind_size * -1, SEEK_CUR)) {
+		if (fseek(file, (long)rewind_size * -1, SEEK_CUR)) {
 			ret = -errno;
 			goto err;
 		}
@@ -622,7 +623,7 @@ int tplg_load_one_control(struct snd_soc_tplg_ctl_hdr **ctl, char **priv_data,
 	case SND_SOC_TPLG_CTL_BYTES:
 		/* load bytes type controls */
 		rewind_size = sizeof(struct snd_soc_tplg_ctl_hdr);
-		if (fseek(file, rewind_size * -1, SEEK_CUR)) {
+		if (fseek(file, (long)rewind_size * -1, SEEK_CUR)) {
 			ret = -errno;
 			goto err;
 		}
@@ -744,8 +745,8 @@ int tplg_load_controls(int num_kcontrols, FILE *file)
 		case SND_SOC_TPLG_DAPM_CTL_VOLSW:
 			/* load mixer type control */
 			read_size = sizeof(struct snd_soc_tplg_ctl_hdr);
-			if (fseek(file, read_size * -1, SEEK_CUR)) {
-				return -errno;
+			if (fseek(file, (long)read_size * -1, SEEK_CUR)) {
+				ret = -errno;
 				goto err;
 			}
 
@@ -770,7 +771,7 @@ int tplg_load_controls(int num_kcontrols, FILE *file)
 		case SND_SOC_TPLG_DAPM_CTL_ENUM_VALUE:
 			/* load enum type control */
 			read_size = sizeof(struct snd_soc_tplg_ctl_hdr);
-			if (fseek(file, read_size * -1, SEEK_CUR)) {
+			if (fseek(file, (long)read_size * -1, SEEK_CUR)) {
 				ret = -errno;
 				goto err;
 			}
@@ -792,7 +793,7 @@ int tplg_load_controls(int num_kcontrols, FILE *file)
 		case SND_SOC_TPLG_CTL_BYTES:
 			/* load bytes type controls */
 			read_size = sizeof(struct snd_soc_tplg_ctl_hdr);
-			if (fseek(file, read_size * -1, SEEK_CUR)) {
+			if (fseek(file, (long)read_size * -1, SEEK_CUR)) {
 				ret = -errno;
 				goto err;
 			}
@@ -832,7 +833,7 @@ int tplg_load_src(int comp_id, int pipeline_id, int size,
 {
 	struct snd_soc_tplg_vendor_array *array = NULL;
 	size_t total_array_size = 0, read_size;
-	int ret = 0;
+	int ret;
 
 	/* allocate memory for vendor tuple array */
 	array = (struct snd_soc_tplg_vendor_array *)malloc(size);
@@ -846,21 +847,21 @@ int tplg_load_src(int comp_id, int pipeline_id, int size,
 		read_size = sizeof(struct snd_soc_tplg_vendor_array);
 		ret = fread(array, read_size, 1, file);
 		if (ret != 1) {
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		/* check for array size mismatch */
 		if (!is_valid_priv_size(total_array_size, size, array)) {
 			fprintf(stderr, "error: load src array size mismatch\n");
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		ret = tplg_read_array(array, file);
 		if (ret) {
 			fprintf(stderr, "error: read array fail\n");
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return ret;
 		}
 
@@ -871,7 +872,7 @@ int tplg_load_src(int comp_id, int pipeline_id, int size,
 		if (ret != 0) {
 			fprintf(stderr, "error: parse src comp_tokens %d\n",
 				size);
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
@@ -881,18 +882,18 @@ int tplg_load_src(int comp_id, int pipeline_id, int size,
 				       array->size);
 		if (ret != 0) {
 			fprintf(stderr, "error: parse src tokens %d\n", size);
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		total_array_size += array->size;
 
 		/* read next array */
-		array = (void *)array + array->size;
+		array = MOVE_POINTER_BY_BYTES(array, array->size);
 	}
 
 	/* point to the start of array so it gets freed properly */
-	array = (void *)array - total_array_size;
+	array = MOVE_POINTER_BY_BYTES(array, -total_array_size);
 
 	/* configure src */
 	src->comp.hdr.cmd = SOF_IPC_GLB_TPLG_MSG | SOF_IPC_TPLG_COMP_NEW;
@@ -912,7 +913,7 @@ int tplg_load_asrc(int comp_id, int pipeline_id, int size,
 {
 	struct snd_soc_tplg_vendor_array *array = NULL;
 	size_t total_array_size = 0, read_size;
-	int ret = 0;
+	int ret;
 
 	/* allocate memory for vendor tuple array */
 	array = (struct snd_soc_tplg_vendor_array *)malloc(size);
@@ -926,21 +927,21 @@ int tplg_load_asrc(int comp_id, int pipeline_id, int size,
 		read_size = sizeof(struct snd_soc_tplg_vendor_array);
 		ret = fread(array, read_size, 1, file);
 		if (ret != 1) {
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		/* check for array size mismatch */
 		if (!is_valid_priv_size(total_array_size, size, array)) {
 			fprintf(stderr, "error: load asrc array size mismatch\n");
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		ret = tplg_read_array(array, file);
 		if (ret) {
 			fprintf(stderr, "error: read array fail\n");
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return ret;
 		}
 
@@ -951,7 +952,7 @@ int tplg_load_asrc(int comp_id, int pipeline_id, int size,
 		if (ret != 0) {
 			fprintf(stderr, "error: parse asrc comp_tokens %d\n",
 				size);
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
@@ -961,18 +962,18 @@ int tplg_load_asrc(int comp_id, int pipeline_id, int size,
 				       array->size);
 		if (ret != 0) {
 			fprintf(stderr, "error: parse asrc tokens %d\n", size);
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		total_array_size += array->size;
 
 		/* read next array */
-		array = (void *)array + array->size;
+		array = MOVE_POINTER_BY_BYTES(array, array->size);
 	}
 
 	/* point to the start of array so it gets freed properly */
-	array = (void *)array - total_array_size;
+	array = MOVE_POINTER_BY_BYTES(array, -total_array_size);
 
 	/* configure asrc */
 	asrc->comp.hdr.cmd = SOF_IPC_GLB_TPLG_MSG | SOF_IPC_TPLG_COMP_NEW;
@@ -994,7 +995,7 @@ int tplg_load_process(int comp_id, int pipeline_id, int size,
 	struct snd_soc_tplg_vendor_array *array = NULL;
 	size_t total_array_size = 0;
 	size_t read_size;
-	int ret = 0;
+	int ret;
 
 	/* allocate memory for vendor tuple array */
 	array = (struct snd_soc_tplg_vendor_array *)malloc(size);
@@ -1008,21 +1009,21 @@ int tplg_load_process(int comp_id, int pipeline_id, int size,
 		read_size = sizeof(struct snd_soc_tplg_vendor_array);
 		ret = fread(array, read_size, 1, file);
 		if (ret != 1) {
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		/* check for array size mismatch */
 		if (!is_valid_priv_size(total_array_size, size, array)) {
 			fprintf(stderr, "error: load process array size mismatch\n");
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		ret = tplg_read_array(array, file);
 		if (ret) {
 			fprintf(stderr, "error: read array fail\n");
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return ret;
 		}
 
@@ -1033,7 +1034,7 @@ int tplg_load_process(int comp_id, int pipeline_id, int size,
 		if (ret != 0) {
 			fprintf(stderr, "error: parse process comp_tokens %d\n",
 				size);
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
@@ -1044,7 +1045,7 @@ int tplg_load_process(int comp_id, int pipeline_id, int size,
 		if (ret != 0) {
 			fprintf(stderr, "error: parse process tokens %d\n",
 				size);
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
@@ -1056,18 +1057,18 @@ int tplg_load_process(int comp_id, int pipeline_id, int size,
 		if (ret != 0) {
 			fprintf(stderr, "error: parse comp extended tokens %d\n",
 				size);
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		total_array_size += array->size;
 
 		/* read next array */
-		array = (void *)array + array->size;
+		array = MOVE_POINTER_BY_BYTES(array, array->size);
 	}
 
 	/* point to the start of array so it gets freed properly */
-	array = (void *)array - total_array_size;
+	array = MOVE_POINTER_BY_BYTES(array, -total_array_size);
 
 	/* configure asrc */
 	process->comp.hdr.cmd = SOF_IPC_GLB_TPLG_MSG | SOF_IPC_TPLG_COMP_NEW;
@@ -1087,7 +1088,7 @@ int tplg_load_mixer(int comp_id, int pipeline_id, int size,
 {
 	struct snd_soc_tplg_vendor_array *array = NULL;
 	size_t total_array_size = 0, read_size;
-	int ret = 0;
+	int ret;
 
 	/* allocate memory for vendor tuple array */
 	array = (struct snd_soc_tplg_vendor_array *)malloc(size);
@@ -1101,21 +1102,21 @@ int tplg_load_mixer(int comp_id, int pipeline_id, int size,
 		read_size = sizeof(struct snd_soc_tplg_vendor_array);
 		ret = fread(array, read_size, 1, file);
 		if (ret != 1) {
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		/* check for array size mismatch */
 		if (!is_valid_priv_size(total_array_size, size, array)) {
 			fprintf(stderr, "error: load mixer array size mismatch\n");
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		ret = tplg_read_array(array, file);
 		if (ret) {
 			fprintf(stderr, "error: read array fail\n");
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return ret;
 		}
 
@@ -1126,18 +1127,18 @@ int tplg_load_mixer(int comp_id, int pipeline_id, int size,
 		if (ret != 0) {
 			fprintf(stderr, "error: parse src comp_tokens %d\n",
 				size);
-			free((void *)array - total_array_size);
+			free(MOVE_POINTER_BY_BYTES(array, -total_array_size));
 			return -EINVAL;
 		}
 
 		total_array_size += array->size;
 
 		/* read next array */
-		array = (void *)array + array->size;
+		array = MOVE_POINTER_BY_BYTES(array, array->size);
 	}
 
 	/* point to the start of array so it gets freed properly */
-	array = (void *)array - total_array_size;
+	array = MOVE_POINTER_BY_BYTES(array, -total_array_size);
 
 	/* configure src */
 	mixer->comp.hdr.cmd = SOF_IPC_GLB_TPLG_MSG | SOF_IPC_TPLG_COMP_NEW;

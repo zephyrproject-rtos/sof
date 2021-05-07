@@ -8,7 +8,7 @@
 //         Ranjani Sridharan <ranjani.sridharan@linux.intel.com>
 
 #include <sof/lib/alloc.h>
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/driver.h>
 #include <stdlib.h>
 
 /* testbench ipc */
@@ -18,6 +18,16 @@ struct ipc *_ipc;
 struct ipc_data {
 	struct ipc_data_host_buffer dh_buffer;
 };
+
+int ipc_platform_compact_write_msg(ipc_cmd_hdr *hdr, int words)
+{
+	return 0; /* number of words read - not currently used on this platform */
+}
+
+int ipc_platform_compact_read_msg(ipc_cmd_hdr *hdr, int words)
+{
+	return 0; /* number of words read - not currently used on this platform */
+}
 
 enum task_state ipc_platform_do_cmd(void *data)
 {

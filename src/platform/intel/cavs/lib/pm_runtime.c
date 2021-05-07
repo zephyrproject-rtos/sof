@@ -29,6 +29,9 @@
 #include <sof/trace/trace.h>
 #include <ipc/topology.h>
 #include <user/trace.h>
+#if CAVS_VERSION >= CAVS_VERSION_1_8
+#include <cavs/drivers/sideband-ipc.h>
+#endif
 
 #include <version.h>
 #include <stdint.h>
@@ -54,9 +57,6 @@ static void cavs_pm_runtime_host_dma_l1_entry(void)
 
 	pprd->host_dma_l1_sref++;
 
-	platform_shared_commit(prd, sizeof(*prd));
-	platform_shared_commit(pprd, sizeof(*pprd));
-
 	spin_unlock_irq(&prd->lock, flags);
 }
 
@@ -81,9 +81,6 @@ static inline void cavs_pm_runtime_force_host_dma_l1_exit(void)
 			   shim_read(SHIM_SVCFG) & ~(SHIM_SVCFG_FORCE_L1_EXIT));
 	}
 
-	platform_shared_commit(prd, sizeof(*prd));
-	platform_shared_commit(pprd, sizeof(*pprd));
-
 	spin_unlock_irq(&prd->lock, flags);
 }
 
@@ -100,14 +97,10 @@ static inline void cavs_pm_runtime_enable_dsp(bool enable)
 
 	pprd->dsp_d0 = !enable;
 
-	platform_shared_commit(prd, sizeof(*prd));
-
 	irq_local_enable(flags);
 
 	tr_info(&power_tr, "pm_runtime_enable_dsp dsp_d0_sref %d",
 		pprd->dsp_d0);
-
-	platform_shared_commit(pprd, sizeof(*pprd));
 
 #if CONFIG_DSP_RESIDENCY_COUNTERS
 	struct clock_info *clk_info = clocks_get() + CLK_CPU(cpu_get_id());
@@ -130,9 +123,6 @@ static inline bool cavs_pm_runtime_is_active_dsp(void)
 {
 	struct pm_runtime_data *prd = pm_runtime_data_get();
 	struct cavs_pm_runtime_data *pprd = prd->platform_data;
-
-	platform_shared_commit(prd, sizeof(*prd));
-	platform_shared_commit(pprd, sizeof(*pprd));
 
 	return pprd->dsp_d0;
 }
@@ -384,9 +374,6 @@ static inline void cavs_pm_runtime_core_dis_hp_clk(uint32_t index)
 	if (all_active_cores_sleep)
 		clock_low_power_mode(CLK_CPU(index), true);
 
-	platform_shared_commit(prd, sizeof(*prd));
-	platform_shared_commit(pprd, sizeof(*pprd));
-
 	spin_unlock_irq(&prd->lock, flags);
 }
 
@@ -401,9 +388,6 @@ static inline void cavs_pm_runtime_core_en_hp_clk(uint32_t index)
 	pprd->sleep_core_mask &= ~BIT(index);
 	clock_low_power_mode(CLK_CPU(index), false);
 
-	platform_shared_commit(prd, sizeof(*prd));
-	platform_shared_commit(pprd, sizeof(*pprd));
-
 	spin_unlock_irq(&prd->lock, flags);
 }
 
@@ -415,7 +399,7 @@ static inline void cavs_pm_runtime_dis_dsp_pg(uint32_t index)
 	uint32_t lps_ctl, tries = PLATFORM_PM_RUNTIME_DSP_TRIES;
 	uint32_t flag = PWRD_MASK & index;
 
-	index &= ~(PWRD_MASK);
+	index &= ~PWRD_MASK;
 
 	if (index == PLATFORM_PRIMARY_CORE_ID) {
 		lps_ctl = shim_read(SHIM_LPSCTL);
@@ -606,6 +590,17 @@ bool platform_pm_runtime_is_active(uint32_t context, uint32_t index)
 void platform_pm_runtime_power_off(void)
 {
 	uint32_t hpsram_mask[PLATFORM_HPSRAM_SEGMENTS], i;
+#if CAVS_VERSION >= CAVS_VERSION_1_8
+	int ret;
+
+	/* check if DSP is busy sending IPC for 2ms */
+	ret = poll_for_register_delay(IPC_HOST_BASE + IPC_DIPCIDR,
+				      IPC_DIPCIDR_BUSY, 0,
+				      2000);
+	/* did command succeed */
+	if (ret < 0)
+		tr_err(&power_tr, "failed to wait for DSP sent IPC handled.");
+#endif
 	/* power down entire HPSRAM */
 	for (i = 0; i < PLATFORM_HPSRAM_SEGMENTS; i++)
 		hpsram_mask[i] = HPSRAM_MASK(i);

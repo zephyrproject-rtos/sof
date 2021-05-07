@@ -85,7 +85,6 @@ void mn_init(struct sof *sof)
 
 	spinlock_init(&sof->mn->lock);
 
-	platform_shared_commit(sof->mn, sizeof(*sof->mn));
 }
 
 /**
@@ -105,8 +104,6 @@ static inline bool is_mclk_source_in_use(void)
 			break;
 		}
 	}
-
-	platform_shared_commit(mn, sizeof(*mn));
 
 	return ret;
 }
@@ -165,7 +162,6 @@ static inline int setup_initial_mclk_source(uint32_t mclk_id,
 
 	mn->mclk_sources_ref[mclk_id]++;
 out:
-	platform_shared_commit(mn, sizeof(*mn));
 
 	return ret;
 }
@@ -207,8 +203,6 @@ static inline int check_current_mclk_source(uint16_t mclk_id, uint32_t mclk_rate
 
 		mn->mclk_sources_ref[mclk_id]++;
 	}
-
-	platform_shared_commit(mn, sizeof(*mn));
 
 	return ret;
 }
@@ -270,7 +264,6 @@ int mn_set_mclk(uint16_t mclk_id, uint32_t mclk_rate)
 		mn->mclk_rate[mclk_id] = mclk_rate;
 
 out:
-	platform_shared_commit(mn, sizeof(*mn));
 
 	spin_unlock(&mn->lock);
 
@@ -305,7 +298,6 @@ void mn_release_mclk(uint32_t mclk_id)
 
 		mn->mclk_source_clock = 0;
 	}
-	platform_shared_commit(mn, sizeof(*mn));
 	spin_unlock(&mn->lock);
 }
 
@@ -443,8 +435,6 @@ static inline bool is_bclk_source_in_use(enum bclk_source clk_src)
 		}
 	}
 
-	platform_shared_commit(mn, sizeof(*mn));
-
 	return ret;
 }
 
@@ -482,8 +472,6 @@ static inline int setup_initial_bclk_mn_source(uint32_t bclk, uint32_t *scr_div,
 
 	mn_reg_write(MN_MDIVCTRL, 0, mdivc);
 
-	platform_shared_commit(mn, sizeof(*mn));
-
 	return 0;
 }
 
@@ -513,7 +501,6 @@ static inline void reset_bclk_mn_source(void)
 
 	mn->bclk_source_mn_clock = clk_index;
 
-	platform_shared_commit(mn, sizeof(*mn));
 }
 
 /**
@@ -541,7 +528,6 @@ static inline int setup_current_bclk_mn_source(uint32_t bclk, uint32_t *scr_div,
 	ret = -EINVAL;
 
 out:
-	platform_shared_commit(mn, sizeof(*mn));
 
 	return ret;
 }
@@ -590,8 +576,6 @@ static inline bool check_bclk_xtal_source(uint32_t bclk, bool mn_in_use,
 			break;
 	}
 
-	platform_shared_commit(mn, sizeof(*mn));
-
 	return ret;
 }
 #endif
@@ -637,7 +621,6 @@ int mn_set_bclk(uint32_t dai_index, uint32_t bclk_rate,
 	}
 
 out:
-	platform_shared_commit(mn, sizeof(*mn));
 
 	spin_unlock(&mn->lock);
 
@@ -651,7 +634,6 @@ void mn_release_bclk(uint32_t dai_index)
 
 	spin_lock(&mn->lock);
 	mn->bclk_sources[dai_index] = MN_BCLK_SOURCE_NONE;
-	platform_shared_commit(mn, sizeof(*mn));
 
 	mn_in_use = is_bclk_source_in_use(MN_BCLK_SOURCE_MN);
 	/* release the M/N clock source if not used */

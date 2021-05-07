@@ -15,7 +15,6 @@
 #include <cavs/lib/memory.h>
 #include <sof/lib/cpu.h>
 
-
 /* physical DSP addresses */
 
 /* shim */
@@ -372,7 +371,6 @@
 #define HEAP_LP_BUFFER_COUNT 0
 #endif
 
-
 #define PLATFORM_HEAP_SYSTEM		CONFIG_CORE_COUNT /* one per core */
 #define PLATFORM_HEAP_SYSTEM_RUNTIME	CONFIG_CORE_COUNT /* one per core */
 #define PLATFORM_HEAP_RUNTIME		1
@@ -384,7 +382,6 @@
 #define SOF_LP_STACK_SIZE		0x1000
 #define SOF_LP_STACK_BASE		(LP_SRAM_BASE + LP_SRAM_SIZE)
 #define SOF_LP_STACK_END		(SOF_LP_STACK_BASE - SOF_LP_STACK_SIZE)
-
 
 /* Vector and literal sizes - do not use core-isa.h */
 #define SOF_MEM_VECBASE			HP_SRAM_VECBASE_RESET
@@ -433,7 +430,7 @@
 
 /* code loader entry point for base fw */
 #define _SRAM_VECBASE_RESET (BOOT_LDR_BSS_BASE + BOOT_LDR_BSS_SIZE)
-#define SRAM_VECBASE_RESET ALIGN(_SRAM_VECBASE_RESET,4096)
+#define SRAM_VECBASE_RESET ALIGN_UP_INTERNAL(_SRAM_VECBASE_RESET, 4096)
 
 #endif /* __PLATFORM_LIB_MEMORY_H__ */
 

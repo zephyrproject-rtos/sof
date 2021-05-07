@@ -5,7 +5,7 @@
 // Author: Liam Girdwood <liam.r.girdwood@linux.intel.com>
 //         Keyon Jie <yang.jie@linux.intel.com>
 
-#include <sof/drivers/ipc.h>
+#include <sof/ipc/driver.h>
 #include <sof/lib/alloc.h>
 #include <sof/lib/dma.h>
 #include <sof/platform.h>
@@ -116,7 +116,7 @@ static int ipc_get_page_descriptors(struct dma *dmac, uint8_t *page_table,
 		tr_err(&ipc_tr, "ipc_get_page_descriptors(): dma_get_attribute() failed");
 		goto out;
 	}
-	elem.size = (ring->pages * 20 + 7) / 8;
+	elem.size = DIV_ROUND_UP(ring->pages * 20, 8);
 	elem.size = ALIGN_UP(elem.size, dma_copy_align);
 	config.elem_array.elems = &elem;
 	config.elem_array.count = 1;

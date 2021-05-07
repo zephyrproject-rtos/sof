@@ -16,7 +16,6 @@
 #include <sof/sof.h>
 #include <sof/spinlock.h>
 
-
 #if CONFIG_APOLLOLAKE
 #define DMAC0_CLASS 1
 #define DMAC1_CLASS 2
@@ -255,9 +254,6 @@ int dmac_init(struct sof *sof)
 	/* early lock initialization for ref counting */
 	for (i = 0; i < sof->dma_info->num_dmas; i++)
 		spinlock_init(&sof->dma_info->dma_array[i].lock);
-
-	platform_shared_commit(sof->dma_info->dma_array,
-			       sizeof(struct dma) * sof->dma_info->num_dmas);
 
 	return 0;
 }

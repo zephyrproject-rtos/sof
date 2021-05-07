@@ -5,6 +5,7 @@
 // Author: Bartosz Kokoszko	<bartoszx.kokoszko@linux.intel.com>
 //	   Artur Kloniecki	<arturx.kloniecki@linux.intel.com>
 
+#include <assert.h>
 #include <endian.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -14,6 +15,7 @@
 #include <unistd.h>
 #include <math.h>
 #include <sof/lib/uuid.h>
+#include <time.h>
 #include <user/abi_dbg.h>
 #include <user/trace.h>
 #include "convert.h"
@@ -29,6 +31,9 @@
 #define TRACE_IDS_MASK			((1 << TRACE_ID_LENGTH) - 1)
 #define INVALID_TRACE_ID		(-1 & TRACE_IDS_MASK)
 
+/** Dictionary entry. This MUST match the start of the linker output
+ * defined by _DECLARE_LOG_ENTRY().
+ */
 struct ldc_entry_header {
 	uint32_t level;
 	uint32_t component_class;
@@ -38,6 +43,7 @@ struct ldc_entry_header {
 	uint32_t text_len;
 };
 
+/** Dictionary entry + unformatted parameters */
 struct ldc_entry {
 	struct ldc_entry_header header;
 	char *file_name;
@@ -45,6 +51,7 @@ struct ldc_entry {
 	uint32_t *params;
 };
 
+/** Dictionary entry + formatted parameters */
 struct proc_ldc_entry {
 	int subst_mask;
 	struct ldc_entry_header header;
@@ -186,6 +193,15 @@ static const char *asprintf_entry_text(uint32_t entry_address)
 	return entry.text;
 }
 
+/** printf-like formatting from the binary ldc_entry input to the
+ *  formatted proc_lpc_entry output. Also copies the unmodified
+ *  ldc_entry_header from input to output.
+ *
+ * @param[out] pe copy of the header + formatted output
+ * @param[in] e copy of the dictionary entry with unformatted,
+    uint32_t params have been inserted.
+   @param[in] use_colors whether to use ANSI terminal codes
+*/
 static void process_params(struct proc_ldc_entry *pe,
 			   const struct ldc_entry *e,
 			   int use_colors)
@@ -278,23 +294,64 @@ static double to_usecs(uint64_t time)
 	return (double)time / global_config->clock;
 }
 
+/** Justified timestamp width for printf format string */
+static unsigned int timestamp_width(unsigned int precision)
+{
+	/* 64bits yields less than 20 digits precision. As reported by
+	 * gcc 9.3, this avoids a very long precision causing snprintf()
+	 * to truncate time_fmt
+	 */
+	assert(precision >= 0 && precision < 20);
+	/*
+	 * 12 digits for units is enough for 1M seconds = 11 days which
+	 * should be enough for most test runs.
+	 *
+	 * Add 1 for the comma when there is one.
+	 */
+	return 12 + (precision > 0 ? 1 : 0) + precision;
+}
+
 static inline void print_table_header(void)
 {
 	FILE *out_fd = global_config->out_fd;
 	int hide_location = global_config->hide_location;
-	int time_precision = global_config->time_precision;
 	char time_fmt[32];
 
-	if (time_precision >= 0) {
-		snprintf(time_fmt, sizeof(time_fmt), "%%%ds %%%ds ",
-			 time_precision + 12, time_precision + 12);
-		fprintf(out_fd, time_fmt, "TIMESTAMP", "DELTA");
+	char date_string[64];
+	const time_t epoc_secs = time(NULL);
+	/* See SOF_IPC_TRACE_DMA_PARAMS_EXT in the kernel sources */
+	struct timespec ktime;
+	const int gettime_ret = clock_gettime(CLOCK_MONOTONIC, &ktime);
+
+	if (gettime_ret) {
+		log_err("clock_gettime() failed: %s\n",
+			strerror(gettime_ret));
+		exit(1);
 	}
+
+	if (global_config->time_precision >= 0) {
+		const unsigned int ts_width =
+			timestamp_width(global_config->time_precision);
+		snprintf(time_fmt, sizeof(time_fmt), "%%-%ds(us)%%%ds  ",
+			 ts_width, ts_width);
+		fprintf(out_fd, time_fmt, " TIMESTAMP", "DELTA");
+	}
+
 	fprintf(out_fd, "%2s %-18s ", "C#", "COMPONENT");
 	if (!hide_location)
 		fprintf(out_fd, "%-29s ", "LOCATION");
-	fprintf(out_fd, "%s\n", "CONTENT");
+	fprintf(out_fd, "%s", "CONTENT");
 
+	if (global_config->time_precision >= 0) {
+		/* e.g.: ktime=4263.487s @ 2021-04-27 14:21:13 -0700 PDT */
+		fprintf(out_fd, "\tktime=%lu.%03lus",
+			ktime.tv_sec, ktime.tv_nsec / 1000000);
+		if (strftime(date_string, sizeof(date_string),
+			     "%F %X %z %Z", localtime(&epoc_secs)))
+			fprintf(out_fd, "  @  %s", date_string);
+	}
+
+	fprintf(out_fd, "\n");
 	fflush(out_fd);
 }
 
@@ -369,9 +426,16 @@ static char *format_file_name(char *file_name_raw, int full_name)
 	return name;
 }
 
+/** Formats and outputs one entry from the trace + the corresponding
+ * ldc_entry from the dictionary passed as arguments. Expects the log
+ * variables to have already been copied into the ldc_entry.
+ */
 static void print_entry_params(const struct log_entry_header *dma_log,
 			       const struct ldc_entry *entry, uint64_t last_timestamp)
 {
+	static int entry_number = 1;
+	static uint64_t timestamp_origin;
+
 	FILE *out_fd = global_config->out_fd;
 	int use_colors = global_config->use_colors;
 	int raw_output = global_config->raw_output;
@@ -387,8 +451,31 @@ static void print_entry_params(const struct log_entry_header *dma_log,
 	if (raw_output)
 		use_colors = 0;
 
-	if (dt < 0 || dt > 1000.0 * 1000.0 * 1000.0)
+	/* Something somewhere went wrong */
+	if (dt > 1000.0 * 1000.0 * 1000.0)
 		dt = NAN;
+
+	if (dma_log->timestamp < last_timestamp) {
+		fprintf(out_fd,
+			"\n\t\t --- negative DELTA: wrap, IPC_TRACE, other? ---\n\n");
+		entry_number = 1;
+	}
+
+	/* The first entry:
+	 *  - is never shown with a relative TIMESTAMP (to itself!?)
+	 *  - shows a zero DELTA
+	 */
+	if (entry_number == 1) {
+		entry_number++;
+		/* Display absolute (and random) timestamps */
+		timestamp_origin = 0;
+		dt = 0;
+	} else if (entry_number == 2) {
+		entry_number++;
+		if (global_config->relative_timestamps == 1)
+			/* Switch to relative timestamps from now on. */
+			timestamp_origin = last_timestamp;
+	} /* We don't need the exact entry_number after 3 */
 
 	if (dma_log->id_0 != INVALID_TRACE_ID &&
 	    dma_log->id_1 != INVALID_TRACE_ID)
@@ -397,7 +484,7 @@ static void print_entry_params(const struct log_entry_header *dma_log,
 	else
 		ids[0] = '\0';
 
-	if (raw_output) {
+	if (raw_output) { /* "raw" means script-friendly (not all hex) */
 		const char *entry_fmt = "%s%u %u %s%s%s ";
 
 		if (time_precision >= 0)
@@ -413,25 +500,23 @@ static void print_entry_params(const struct log_entry_header *dma_log,
 			raw_output && strlen(ids) ? "-" : "",
 			ids);
 		if (time_precision >= 0)
-			fprintf(out_fd, time_fmt, to_usecs(dma_log->timestamp), dt);
+			fprintf(out_fd, time_fmt,
+				to_usecs(dma_log->timestamp - timestamp_origin), dt);
 		if (!hide_location)
 			fprintf(out_fd, "(%s:%u) ",
 				format_file_name(entry->file_name, raw_output),
 				entry->header.line_idx);
 	} else {
-		/* timestamp */
-		/* 64bits yields less than 20 digits precision. As
-		 * reported by gcc 9.3, this avoids a very long
-		 * precision causing snprintf() to truncate time_fmt
-		 */
-		if (time_precision >= 0 && time_precision < 20) {
+		if (time_precision >= 0) {
+			const unsigned int ts_width = timestamp_width(time_precision);
+
 			snprintf(time_fmt, sizeof(time_fmt),
 				 "%%s[%%%d.%df] (%%%d.%df)%%s ",
-				 time_precision + 10, time_precision,
-				 time_precision + 10, time_precision);
+				 ts_width, time_precision, ts_width, time_precision);
+
 			fprintf(out_fd, time_fmt,
 				use_colors ? KGRN : "",
-				to_usecs(dma_log->timestamp), dt,
+				to_usecs(dma_log->timestamp - timestamp_origin), dt,
 				use_colors ? KNRM : "");
 		}
 
@@ -457,6 +542,7 @@ static void print_entry_params(const struct log_entry_header *dma_log,
 			get_level_name(entry->header.level));
 	}
 
+	/* Minimal, printf-like formatting */
 	process_params(&proc_entry, entry, use_colors);
 
 	switch (proc_entry.header.params_num) {
@@ -564,6 +650,15 @@ out:
 	return ret;
 }
 
+/** Gets the dictionary entry matching the log entry argument, reads
+ * from the log the variable number of arguments needed by this entry
+ * and passes everything to print_entry_params() to finish processing
+ * this log entry. So not just "fetch" but everything else after it too.
+ *
+ * @param[in] dma_log protocol header from any trace (not just from the
+ * "DMA" trace)
+ * @param[out] last_timestamp timestamp found for this entry
+ */
 static int fetch_entry(const struct log_entry_header *dma_log, uint64_t *last_timestamp)
 {
 	struct ldc_entry entry;
@@ -598,6 +693,10 @@ static int fetch_entry(const struct log_entry_header *dma_log, uint64_t *last_ti
 		size_t size = sizeof(uint32_t) * entry.header.params_num;
 		uint8_t *n;
 
+		/* Repeatedly read() how much we still miss until we got
+		 * enough for the number of params needed by this
+		 * particular statement.
+		 */
 		for (n = (uint8_t *)entry.params; size; n += ret, size -= ret) {
 			ret = read(global_config->serial_fd, n, size);
 			if (ret < 0) {
@@ -605,7 +704,8 @@ static int fetch_entry(const struct log_entry_header *dma_log, uint64_t *last_ti
 				goto out;
 			}
 			if (ret != size)
-				log_err("Partial read of %u bytes of %lu.\n", ret, size);
+				log_err("Partial read of %u bytes of %lu, reading more\n",
+					ret, size);
 		}
 	}
 
@@ -673,15 +773,21 @@ static int serial_read(uint64_t *last_timestamp)
 		}
 	}
 
-	/* fetching entry from elf dump */
+	/* fetching entry from elf dump and complete processing this log
+	 * line
+	 */
 	return fetch_entry(&dma_log, last_timestamp);
 }
 
+/** Main logger loop */
 static int logger_read(void)
 {
 	struct log_entry_header dma_log;
 	int ret = 0;
 	uint64_t last_timestamp = 0;
+
+	bool ldc_address_OK = false;
+	unsigned int skipped_dwords = 0;
 
 	if (!global_config->raw_output)
 		print_table_header();
@@ -694,6 +800,7 @@ static int logger_read(void)
 				return ret;
 		}
 
+	/* One iteration per log statement */
 	while (!ferror(global_config->in_fd)) {
 		/* getting entry parameters from dma dump */
 		ret = fread(&dma_log, sizeof(dma_log), 1, global_config->in_fd);
@@ -734,12 +841,41 @@ static int logger_read(void)
 		if (dma_log.log_entry_address < global_config->logs_header->base_address ||
 		    dma_log.log_entry_address > global_config->logs_header->base_address +
 		    global_config->logs_header->data_length) {
-			/* in case the address is not correct input fd should be
-			 * move forward by one DWORD, not entire struct dma_log
+			/* Finding uninitialized and incomplete log statements in the
+			 * mailbox ring buffer is routine. Take note in both cases but
+			 * report errors only for the DMA trace.
+			 */
+			if (global_config->trace && ldc_address_OK) {
+				/* FIXME: make this a log_err() */
+				fprintf(global_config->out_fd,
+					"warn: log_entry_address %#8x is not in dictionary range!\n",
+					dma_log.log_entry_address);
+				fprintf(global_config->out_fd,
+					"warn: Seeking forward 4 bytes at a time until re-synchronize.\n");
+			}
+			ldc_address_OK = false;
+			/* When the address is not correct, move forward by one DWORD (not
+			 * entire struct dma_log)
 			 */
 			fseek(global_config->in_fd, -(sizeof(dma_log) - sizeof(uint32_t)),
 			      SEEK_CUR);
+			skipped_dwords++;
 			continue;
+
+		} else if (!ldc_address_OK) {
+			 /* Just found a valid address (again) */
+
+			/* At this point, skipped_dwords can be == 0
+			 * only when we just started to run.
+			 */
+			if (skipped_dwords != 0) {
+				fprintf(global_config->out_fd,
+					"\nFound valid LDC address after skipping %zu bytes (one line uses %zu + 0 to 16 bytes)\n",
+				       sizeof(uint32_t) * skipped_dwords, sizeof(dma_log));
+			}
+
+			ldc_address_OK = true;
+			skipped_dwords = 0;
 		}
 
 		/* fetching entry from elf dump */
@@ -747,6 +883,18 @@ static int logger_read(void)
 		if (ret)
 			break;
 	}
+
+	/* End of (etrace) file */
+	fprintf(global_config->out_fd,
+		"Skipped %zu bytes after the last statement",
+		sizeof(uint32_t) * skipped_dwords);
+
+	/* maximum 4 arguments supported */
+	if (skipped_dwords < sizeof(dma_log) + 4 * sizeof(uint32_t))
+		fprintf(global_config->out_fd,
+			". Wrap possible, check the start of the output for later logs");
+
+	fprintf(global_config->out_fd, ".\n");
 
 	return ret;
 }
