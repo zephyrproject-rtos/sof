@@ -625,7 +625,6 @@ static int kpb_copy(struct comp_dev *dev)
 	struct comp_buffer *sink = NULL;
 	size_t copy_bytes = 0;
 	size_t sample_width = kpb->config.sampling_width;
-	uint32_t flags = 0;
 	struct draining_data *dd = &kpb->draining_task_data;
 	uint32_t avail_bytes;
 
@@ -641,17 +640,17 @@ static int kpb_copy(struct comp_dev *dev)
 		goto out;
 	}
 
-	buffer_lock(source, &flags);
+	source = buffer_acquire_irq(source);
 
 	/* Validate source */
 	if (!source->stream.r_ptr) {
 		comp_err(dev, "kpb_copy(): invalid source pointers.");
 		ret = -EINVAL;
-		buffer_unlock(source, flags);
+		source = buffer_release_irq(source);
 		goto out;
 	}
 
-	buffer_unlock(source, flags);
+	source = buffer_release_irq(source);
 
 	switch (kpb->state) {
 	case KPB_STATE_RUN:
@@ -665,17 +664,17 @@ static int kpb_copy(struct comp_dev *dev)
 			goto out;
 		}
 
-		buffer_lock(sink, &flags);
+		sink = buffer_acquire_irq(sink);
 
 		/* Validate sink */
 		if (!sink->stream.w_ptr) {
 			comp_err(dev, "kpb_copy(): invalid selector sink pointers.");
 			ret = -EINVAL;
-			buffer_unlock(sink, flags);
+			sink = buffer_release_irq(sink);
 			goto out;
 		}
 
-		buffer_unlock(sink, flags);
+		sink = buffer_release_irq(sink);
 
 		copy_bytes = audio_stream_get_copy_bytes(&source->stream, &sink->stream);
 		if (!copy_bytes) {
@@ -724,17 +723,17 @@ static int kpb_copy(struct comp_dev *dev)
 			goto out;
 		}
 
-		buffer_lock(sink, &flags);
+		sink = buffer_acquire_irq(sink);
 
 		/* Validate sink */
 		if (!sink->stream.w_ptr) {
 			comp_err(dev, "kpb_copy(): invalid host sink pointers.");
 			ret = -EINVAL;
-			buffer_unlock(sink, flags);
+			sink = buffer_release_irq(sink);
 			goto out;
 		}
 
-		buffer_unlock(sink, flags);
+		sink = buffer_release_irq(sink);
 
 		copy_bytes = audio_stream_get_copy_bytes(&source->stream, &sink->stream);
 		if (!copy_bytes) {
@@ -764,7 +763,7 @@ static int kpb_copy(struct comp_dev *dev)
 		copy_bytes = MIN(avail_bytes, kpb->hd.free);
 		ret = PPL_STATUS_PATH_STOP;
 		if (copy_bytes) {
-			buffer_invalidate(source, copy_bytes);
+			buffer_stream_invalidate(source, copy_bytes);
 			ret = kpb_buffer_data(dev, source, copy_bytes);
 			dd->buffered_while_draining += copy_bytes;
 			kpb->hd.free -= copy_bytes;
@@ -1488,7 +1487,7 @@ static void kpb_copy_samples(struct comp_buffer *sink,
 	struct audio_stream *istream = &source->stream;
 	struct audio_stream *ostream = &sink->stream;
 
-	buffer_invalidate(source, size);
+	buffer_stream_invalidate(source, size);
 
 	for (i = 0; i < frames; i++) {
 		for (channel = 0; channel < KPB_NUM_OF_CHANNELS; channel++) {
@@ -1517,7 +1516,7 @@ static void kpb_copy_samples(struct comp_buffer *sink,
 		}
 	}
 
-	buffer_writeback(sink, size);
+	buffer_stream_writeback(sink, size);
 }
 
 /**

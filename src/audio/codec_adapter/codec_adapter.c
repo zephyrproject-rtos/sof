@@ -45,7 +45,7 @@ struct comp_dev *codec_adapter_new(const struct comp_driver *drv,
 
 	comp_cl_dbg(drv, "codec_adapter_new() start");
 
-	if (!drv || !config) {
+	if (!config) {
 		comp_cl_err(drv, "codec_adapter_new(), wrong input params! drv = %x config = %x",
 			    (uint32_t)drv, (uint32_t)config);
 		return NULL;
@@ -123,11 +123,7 @@ int load_setup_config(struct comp_dev *dev, void *cfg, uint32_t size)
 
 	comp_dbg(dev, "load_setup_config() start.");
 
-	if (!dev) {
-		comp_err(dev, "load_setup_config(): no component device.");
-		ret = -EINVAL;
-		goto end;
-	} else if (!cfg || !size) {
+	if (!cfg || !size) {
 		comp_err(dev, "load_setup_config(): no config available cfg: %x, size: %d",
 			 (uintptr_t)cfg, size);
 		ret = -EINVAL;
@@ -386,7 +382,7 @@ int codec_adapter_copy(struct comp_dev *dev)
 		if (bytes_to_process < codec_buff_size)
 			goto db_verify;
 
-		buffer_invalidate(source, codec_buff_size);
+		buffer_stream_invalidate(source, codec_buff_size);
 		codec_adapter_copy_from_source_to_lib(&source->stream, &codec->cpd,
 						      codec_buff_size);
 		codec->cpd.avail = codec_buff_size;
@@ -415,7 +411,7 @@ int codec_adapter_copy(struct comp_dev *dev)
 	if (local_buff->stream.free < get_output_bytes(dev))
 		goto db_verify;
 
-	buffer_invalidate(source, codec_buff_size);
+	buffer_stream_invalidate(source, codec_buff_size);
 	codec_adapter_copy_from_source_to_lib(&source->stream, &codec->cpd,
 					      codec_buff_size);
 	codec->cpd.avail = codec_buff_size;
@@ -469,7 +465,7 @@ copy_period:
 	audio_stream_copy(&local_buff->stream, 0,
 			  &sink->stream, 0,
 			  copy_bytes / cd->stream_params.sample_container_bytes);
-	buffer_writeback(sink, copy_bytes);
+	buffer_stream_writeback(sink, copy_bytes);
 
 	comp_update_buffer_produce(sink, copy_bytes);
 	comp_update_buffer_consume(local_buff, copy_bytes);

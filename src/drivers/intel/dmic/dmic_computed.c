@@ -132,7 +132,7 @@ static void find_modes(struct dai *dai,
 			mfir = fir_list[j]->decim_factor;
 
 			/* Skip if previous decimation factor was the same */
-			if (j > 1 && fir_list[j - 1]->decim_factor == mfir)
+			if (j != 0 && fir_list[j - 1]->decim_factor == mfir)
 				continue;
 
 			mcic = osr / mfir;
@@ -593,7 +593,9 @@ static int configure_registers(struct dai *dai,
 	uint32_t ref;
 	int32_t ci;
 	uint32_t cu;
+#if defined(DMIC_IPM_VER1) || defined(DMIC_IPM_VER2)
 	int ipm;
+#endif
 	int of0;
 	int of1;
 	int fir_decim;
@@ -629,6 +631,11 @@ static int configure_registers(struct dai *dai,
 		dai_err(dai, "configure_registers(): pdata not set");
 		return -EINVAL;
 	}
+
+	/* Pass 2^BFTH to plat_data fifo depth. It will be used later in DMA
+	 * configuration
+	 */
+	dai->plat_data.fifo->depth = 1 << bfth;
 
 	dai_info(dai, "configuring registers");
 

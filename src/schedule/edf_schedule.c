@@ -166,7 +166,7 @@ int schedule_task_init_edf(struct task *task, const struct sof_uuid_entry *uid,
 		goto error;
 
 	/* flush for secondary core */
-	if (cpu_is_secondary(task->core))
+	if (!cpu_is_primary(task->core))
 		dcache_writeback_invalidate_region(edf_pdata,
 						   sizeof(*edf_pdata));
 	return 0;
@@ -281,21 +281,45 @@ int scheduler_init_edf(void)
 	return 0;
 }
 
-static void scheduler_free_edf(void *data)
+static void scheduler_free_edf(void *data, uint32_t flags)
+{
+	struct edf_schedule_data *edf_sch = data;
+	uint32_t irq_flags;
+
+	irq_local_disable(irq_flags);
+
+	/* disable and unregister EDF scheduler interrupt */
+	interrupt_disable(edf_sch->irq, edf_sch);
+	interrupt_unregister(edf_sch->irq, edf_sch);
+
+	if (!(flags & SOF_SCHEDULER_FREE_IRQ_ONLY))
+		/* free main task context */
+		task_main_free();
+
+	irq_local_enable(irq_flags);
+}
+
+static int scheduler_restore_edf(void *data)
 {
 	struct edf_schedule_data *edf_sch = data;
 	uint32_t flags;
 
 	irq_local_disable(flags);
 
-	/* disable and unregister EDF scheduler interrupt */
-	interrupt_disable(edf_sch->irq, edf_sch);
-	interrupt_unregister(edf_sch->irq, edf_sch);
+	edf_sch->irq = interrupt_get_irq(PLATFORM_SCHEDULE_IRQ,
+					 PLATFORM_SCHEDULE_IRQ_NAME);
 
-	/* free main task context */
-	task_main_free();
+	if (edf_sch->irq < 0) {
+		tr_err(&edf_tr, "scheduler_restore_edf(): getting irq failed.");
+		return edf_sch->irq;
+	}
+
+	interrupt_register(edf_sch->irq, edf_scheduler_run, edf_sch);
+	interrupt_enable(edf_sch->irq, edf_sch);
 
 	irq_local_enable(flags);
+
+	return 0;
 }
 
 static void schedule_edf(struct edf_schedule_data *edf_sch)
@@ -311,4 +335,5 @@ static const struct scheduler_ops schedule_edf_ops = {
 	.schedule_task_cancel	= schedule_edf_task_cancel,
 	.schedule_task_free	= schedule_edf_task_free,
 	.scheduler_free		= scheduler_free_edf,
+	.scheduler_restore	= scheduler_restore_edf,
 };

@@ -26,9 +26,9 @@ static inline int cpu_get_id(void)
 	return arch_cpu_get_id();
 }
 
-static inline bool cpu_is_secondary(int id)
+static inline bool cpu_is_primary(int id)
 {
-	return id != PLATFORM_PRIMARY_CORE_ID;
+	return id == PLATFORM_PRIMARY_CORE_ID;
 }
 
 static inline bool cpu_is_me(int id)
@@ -54,6 +54,16 @@ static inline int cpu_is_core_enabled(int id)
 static inline int cpu_enabled_cores(void)
 {
 	return arch_cpu_enabled_cores();
+}
+
+static inline int cpu_restore_secondary_cores(void)
+{
+	return arch_cpu_restore_secondary_cores();
+}
+
+static inline int cpu_secondary_cores_prepare_d0ix(void)
+{
+	return arch_cpu_secondary_cores_prepare_d0ix();
 }
 
 #endif

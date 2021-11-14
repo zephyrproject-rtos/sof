@@ -223,6 +223,18 @@ static int ipc_stream_pcm_params(uint32_t stream)
 		return -EINVAL;
 	}
 
+	switch (pcm_dev->cd->pipeline->status) {
+	case COMP_STATE_ACTIVE:
+	case COMP_STATE_PRE_ACTIVE:
+		/*
+		 * IPC4 has a use-case when a PCM parameter change request can
+		 * be sent on an active pipeline, ignore it
+		 */
+		pipe_dbg(pcm_dev->cd->pipeline,
+			 "ipc: ignore PCM param change request on an active pipeline");
+		return 0;
+	}
+
 #if CONFIG_HOST_PTABLE
 	cd = pcm_dev->cd;
 
@@ -444,10 +456,18 @@ static int ipc_stream_trigger(uint32_t header)
 	 * synchronously.
 	 */
 	if (pipeline_is_timer_driven(pcm_dev->cd->pipeline)) {
-		ipc->delayed_response = true;
+		uint32_t flags;
+
+		spin_lock_irq(&ipc->lock, flags);
+		ipc->task_mask |= IPC_TASK_IN_THREAD;
+		spin_unlock_irq(&ipc->lock, flags);
+
 		ret = pipeline_trigger(pcm_dev->cd->pipeline, pcm_dev->cd, cmd);
-		if (ret <= 0)
-			ipc->delayed_response = false;
+		if (ret <= 0) {
+			spin_lock_irq(&ipc->lock, flags);
+			ipc->task_mask &= ~IPC_TASK_IN_THREAD;
+			spin_unlock_irq(&ipc->lock, flags);
+		}
 	} else {
 		ret = pipeline_trigger_run(pcm_dev->cd->pipeline, pcm_dev->cd, cmd);
 	}
@@ -701,10 +721,23 @@ static int ipc_pm_gate(uint32_t header)
 	if (pm_gate.flags & SOF_PM_NO_TRACE)
 		trace_off();
 
-	if (pm_gate.flags & SOF_PM_PPG)
+	if (pm_gate.flags & SOF_PM_PPG) {
 		pm_runtime_disable(PM_RUNTIME_DSP, PLATFORM_PRIMARY_CORE_ID);
-	else
+#if (CONFIG_CAVS_LPS)
+		cpu_restore_secondary_cores();
+#endif
+	} else {
+		/* before we enable pm runtime and perform D0->D0ix flow
+		 * (primary core powers off secondary cores in
+		 * platform_pg_int_handler) we have to prepare all secondary
+		 * cores data for powering off (disable interrupt, perform
+		 * cache writeback).
+		 */
+#if (CONFIG_CAVS_LPS)
+		cpu_secondary_cores_prepare_d0ix();
+#endif
 		pm_runtime_enable(PM_RUNTIME_DSP, PLATFORM_PRIMARY_CORE_ID);
+	}
 
 	/* resume dma trace if needed */
 	if (!(pm_gate.flags & SOF_PM_NO_TRACE))
@@ -746,7 +779,17 @@ static int ipc_dma_trace_config(uint32_t header)
 {
 	return 0;
 }
+
+static void ipc_dma_trace_free(uint32_t header) {}
+
 #else
+static void ipc_dma_trace_free(uint32_t header)
+{
+	struct dma_trace_data *dmat = dma_trace_data_get();
+
+	dma_trace_disable(dmat);
+}
+
 static int ipc_dma_trace_config(uint32_t header)
 {
 #if CONFIG_HOST_PTABLE
@@ -872,6 +915,9 @@ static int ipc_glb_trace_message(uint32_t header)
 	case SOF_IPC_TRACE_DMA_PARAMS:
 	case SOF_IPC_TRACE_DMA_PARAMS_EXT:
 		return ipc_dma_trace_config(header);
+	case SOF_IPC_TRACE_DMA_FREE:
+		ipc_dma_trace_free(header);
+		return 0;
 	case SOF_IPC_TRACE_FILTER_UPDATE:
 		return ipc_trace_filter_update(header);
 	default:
@@ -1303,20 +1349,20 @@ static int ipc_glb_tplg_free(uint32_t header,
 		int (*free_func)(struct ipc *ipc, uint32_t id))
 {
 	struct ipc *ipc = ipc_get();
-	struct sof_ipc_free ipc_free;
+	struct sof_ipc_free ipc_free_msg;
 	int ret;
 
 	/* copy message with ABI safe method */
-	IPC_COPY_CMD(ipc_free, ipc->comp_data);
+	IPC_COPY_CMD(ipc_free_msg, ipc->comp_data);
 
-	tr_info(&ipc_tr, "ipc: comp %d -> free", ipc_free.id);
+	tr_info(&ipc_tr, "ipc: comp %d -> free", ipc_free_msg.id);
 
 	/* free the object */
-	ret = free_func(ipc, ipc_free.id);
+	ret = free_func(ipc, ipc_free_msg.id);
 
 	if (ret < 0) {
 		tr_err(&ipc_tr, "ipc: comp %d free failed %d",
-		       ipc_free.id, ret);
+		       ipc_free_msg.id, ret);
 	}
 
 	return ret;
@@ -1524,11 +1570,11 @@ void ipc_cmd(ipc_cmd_hdr *_hdr)
 		goto out;
 	}
 
-	if (!cpu_is_secondary(cpu_get_id()))
+	if (cpu_is_primary(cpu_get_id())) {
 		/* A new IPC from the host, delivered to the primary core */
 		ipc->core = PLATFORM_PRIMARY_CORE_ID;
-
-	ipc->delayed_response = false;
+		tr_info(&ipc_tr, "ipc: new cmd 0x%x", hdr->cmd);
+	}
 
 	type = iGS(hdr->cmd);
 

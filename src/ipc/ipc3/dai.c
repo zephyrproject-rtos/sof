@@ -13,6 +13,7 @@
 #include <sof/ipc/msg.h>
 #include <sof/ipc/driver.h>
 #include <sof/lib/dai.h>
+#include <sof/lib/notifier.h>
 #include <sof/drivers/afe-dai.h>
 #include <sof/drivers/edma.h>
 #include <errno.h>
@@ -121,12 +122,9 @@ int ipc_dai_data_config(struct comp_dev *dev)
 		dd->config.burst_elems = config->ssp.tdm_slots;
 		break;
 	case SOF_DAI_INTEL_DMIC:
-		/* We can use always the largest burst length. */
-		dd->config.burst_elems = 8;
-
-		comp_info(dev, "config->dmic.fifo_bits = %u config->dmic.num_pdm_active = %u",
-			  config->dmic.fifo_bits,
-			  config->dmic.num_pdm_active);
+		/* Depth is passed by DMIC driver that retrieves it from blob */
+		dd->config.burst_elems = dd->dai->plat_data.fifo->depth;
+		comp_info(dev, "dai_data_config() burst_elems = %d", dd->config.burst_elems);
 		break;
 	case SOF_DAI_INTEL_HDA:
 		break;
@@ -216,7 +214,7 @@ int ipc_comp_dai_config(struct ipc *ipc, struct ipc_config_dai *common_config,
 	}
 
 	/* message forwarded only by primary core */
-	if (!cpu_is_secondary(cpu_get_id())) {
+	if (cpu_is_primary(cpu_get_id())) {
 		for (i = 0; i < CONFIG_CORE_COUNT; ++i) {
 			if (!comp_on_core[i])
 				continue;
@@ -247,6 +245,26 @@ int ipc_comp_dai_config(struct ipc *ipc, struct ipc_config_dai *common_config,
 	return ret;
 }
 
+void dai_dma_release(struct comp_dev *dev)
+{
+	struct dai_data *dd = comp_get_drvdata(dev);
+
+	/* cannot configure DAI while active */
+	if (dev->state == COMP_STATE_ACTIVE) {
+		comp_info(dev, "dai_config(): Component is in active state. Ignore resetting");
+		return;
+	}
+
+	/* put the allocated DMA channel first */
+	if (dd->chan) {
+		/* remove callback */
+		notifier_unregister(dev, dd->chan, NOTIFIER_ID_DMA_COPY);
+		dma_channel_put(dd->chan);
+		dd->chan->dev_data = NULL;
+		dd->chan = NULL;
+	}
+}
+
 int dai_config(struct comp_dev *dev, struct ipc_config_dai *common_config,
 	       void *spec_config)
 {
@@ -268,10 +286,39 @@ int dai_config(struct comp_dev *dev, struct ipc_config_dai *common_config,
 		return 0;
 	}
 
-	if (dd->chan) {
-		comp_info(dev, "dai_config(): Configured. dma channel index %d, ignore...",
-			  dd->chan->index);
+	switch (config->flags & SOF_DAI_CONFIG_FLAGS_CMD_MASK) {
+	case SOF_DAI_CONFIG_FLAGS_HW_PARAMS:
+		/* set the delayed_dma_stop flag */
+		if (SOF_DAI_QUIRK_IS_SET(config->flags, SOF_DAI_CONFIG_FLAGS_2_STEP_STOP))
+			dd->delayed_dma_stop = true;
+
+		if (dd->chan) {
+			comp_info(dev, "dai_config(): Configured. dma channel index %d, ignore...",
+				  dd->chan->index);
+			return 0;
+		}
+		break;
+	case SOF_DAI_CONFIG_FLAGS_HW_FREE:
+		if (!dd->chan)
+			return 0;
+
+		/* stop DMA and reset config for two-step stop DMA */
+		if (dd->delayed_dma_stop) {
+			ret = dma_stop_delayed(dd->chan);
+			if (ret < 0)
+				return ret;
+
+			dai_dma_release(dev);
+		}
+
 		return 0;
+	case SOF_DAI_CONFIG_FLAGS_PAUSE:
+		if (!dd->chan)
+			return 0;
+
+		return dma_stop_delayed(dd->chan);
+	default:
+		break;
 	}
 
 	if (config->group_id) {

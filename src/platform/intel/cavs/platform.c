@@ -74,7 +74,11 @@ static const struct sof_ipc_fw_ready ready
 		.abi_version = SOF_ABI_VERSION,
 		.src_hash = SOF_SRC_HASH,
 	},
+#if CONFIG_CAVS_IMR_D3_PERSISTENT
+	.flags = DEBUG_SET_FW_READY_FLAGS | SOF_IPC_INFO_D3_PERSISTENT,
+#else
 	.flags = DEBUG_SET_FW_READY_FLAGS,
+#endif
 };
 
 #if CONFIG_MEM_WND
@@ -538,8 +542,21 @@ void platform_wait_for_interrupt(int level)
 {
 	platform_clock_on_waiti();
 
+#ifdef CONFIG_MULTICORE
+	int cpu_id = cpu_get_id();
+
+	/* for secondary cores, if prepare_d0ix_core_mask flag is set for
+	 * specific core, we should prepare for power down before going to wait
+	 * - it is required by D0->D0ix flow.
+	 */
+	if (cpu_id != PLATFORM_PRIMARY_CORE_ID &&
+	    platform_pm_runtime_prepare_d0ix_is_req(cpu_id))
+		cpu_power_down_core(CPU_POWER_DOWN_MEMORY_ON);
+#endif
+
 #if (CONFIG_CAVS_LPS)
-	if (pm_runtime_is_active(PM_RUNTIME_DSP, PLATFORM_PRIMARY_CORE_ID))
+	if (pm_runtime_is_active(PM_RUNTIME_DSP, PLATFORM_PRIMARY_CORE_ID) ||
+	    cpu_get_id() != PLATFORM_PRIMARY_CORE_ID)
 		arch_wait_for_interrupt(level);
 	else
 		lps_wait_for_interrupt(level);
@@ -549,6 +566,7 @@ void platform_wait_for_interrupt(int level)
 }
 #endif
 
+#if CONFIG_CAVS_IMR_D3_PERSISTENT
 /* These structs and macros are from from the ROM code header
  * on cAVS platforms, please keep them immutable
  */
@@ -594,10 +612,19 @@ static void imr_layout_update(void *vector)
 	imr_layout->imr_state.header.imr_restore_vector = vector;
 	dcache_writeback_region(imr_layout, sizeof(*imr_layout));
 }
+#endif
 
 int platform_context_save(struct sof *sof)
 {
+#if CONFIG_CAVS_IMR_D3_PERSISTENT
+	/*
+	 * Both runtime PM and S2Idle suspend works on APL, while S3 ([deep])
+	 * doesn't. Only support IMR restoring on cAVS 1.8 and onward at the
+	 * moment.
+	 * TODO: Root cause of why IMR restore doesn't work on APL during S3
+	 * cycle.
+	 */
 	imr_layout_update((void *)IMR_BOOT_LDR_TEXT_ENTRY_BASE);
-
+#endif
 	return 0;
 }

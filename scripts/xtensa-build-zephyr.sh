@@ -13,7 +13,7 @@ SUPPORTED_PLATFORMS=()
 SUPPORTED_PLATFORMS+=(apl cnl icl tgl-h tgl)
 
 # NXP
-SUPPORTED_PLATFORMS+=(imx8 imx8x)
+SUPPORTED_PLATFORMS+=(imx8 imx8x imx8m)
 
 BUILD_JOBS=$(nproc --all)
 PLATFORMS=()
@@ -39,12 +39,23 @@ Outputs in \$(west topdir)/build-*/ directories
 usage: $0 [options] [ platform(s) ] [ -- cmake arguments ]
 
        -a Build all platforms.
+
        -j n Set number of make build jobs for rimage. Jobs=#cores by default.
            Ignored by "west build".
+
        -k Path to a non-default rimage signing key.
-       -c recursively clones Zephyr inside sof before building.
-          Incompatible with -p. To stop after cloning Zephyr, do not
+
+       -c Using west, downloads inside this sof clone a new Zephyr
+          project with the required git repos. Creates a
+          sof/zephyrproject/modules/audio/sof symbolic link pointing
+          back at this sof clone.
+          Incompatible with -p. To stop after downloading Zephyr, do not
           pass any platform or cmake argument.
+
+       -z Initial Zephyr git ref for the -c option. Can be a branch, tag,
+          full SHA1 in a fork, magic pull/12345/merge,... anything as long as
+          it is fetchable from https://github.com/zephyrproject-rtos/zephyr/
+
        -p Existing Zephyr project directory. Incompatible with -c.  If
           zephyr-project/modules/audio/sof is missing then a
           symbolic link pointing to ${SOF_TOP} will automatically be
@@ -91,17 +102,30 @@ zephyr_fetch_and_switch()
 
 # Downloads zephyrproject inside sof/ and create a ../../.. symbolic
 # link back to sof/
-clone()
+west_init_update()
 {
+	local init_ref="$1"
+
+	# Or, we could have a default value:
+	# init_ref=${1:-811a09bd8305}
+
 	git clone --depth=5 https://github.com/zephyrproject-rtos/zephyr \
 	    "$WEST_TOP"/zephyr
 
-	# This shows how to point SOF CI to and run all SOF tests on any
-	# Zephyr work in progress or any other Zephyr commit from
-	# anywhere. Simply edit remote and reference, uncomment this
-	# line and submit as an SOF Pull Request.
+	# To keep things simple, this moves to a detached HEAD even when
+	# init_ref is a (remote) branch.
+	test -z "$init_ref" ||
+	    zephyr_fetch_and_switch     origin   "${init_ref}"
+
+	# This shows how to point CI at any Zephyr commit from anywhere
+	# and to run all tests on it. Simply edit remote and reference,
+	# uncomment one of these lines and submit as an SOF Pull
+	# Request.  Unlike many git servers, github allows direct
+	# fetching of (full 40-digits) SHAs; even SHAs not in origin but
+	# in forks!
 
 	# zephyr_fetch_and_switch    origin   pull/38374/head
+	# zephyr_fetch_and_switch    origin   19d5448ec117fde8076bec4d0e61da53147f3315
 
 	# SECURITY WARNING for reviewers: never allow unknown code from
 	# unknown submitters on any CI system.
@@ -132,7 +156,7 @@ assert_west_topdir()
 	# https://github.com/zephyrproject-rtos/west/issues/419
 }
 
-build_all()
+build_platforms()
 {
 	cd "$WEST_TOP"
 	assert_west_topdir
@@ -150,11 +174,8 @@ build_all()
 		case "$platform" in
 			apl)
 				PLAT_CONFIG='intel_adsp_cavs15'
-				# XCC build runs out of memory, tracked as
-				# https://github.com/thesofproject/sof/issues/4645
-				unset XTENSA_TOOLS_ROOT
-				#XTENSA_CORE="X4H3I16w2D48w3a_2017_8"
-				#XTENSA_TOOLS_VERSION="RG-2017.8-linux"
+				XTENSA_CORE="X4H3I16w2D48w3a_2017_8"
+				XTENSA_TOOLS_VERSION="RG-2017.8-linux"
 				;;
 			cnl)
 				PLAT_CONFIG='intel_adsp_cavs18'
@@ -180,6 +201,11 @@ build_all()
 				PLAT_CONFIG='nxp_adsp_imx8x'
 				RIMAGE_KEY='ignored for imx8x'
 				;;
+			imx8m)
+				PLAT_CONFIG='nxp_adsp_imx8m'
+				RIMAGE_KEY='ignored for imx8m'
+				;;
+
 			*)
 				echo "Unsupported platform: $platform"
 				exit 1
@@ -222,6 +248,8 @@ build_all()
 			       -l "$STAGING"/sof/sof-"$platform".ldc \
 			       "$bdir"/zephyr/zephyr.elf
 
+			download_missing_submodules
+
 			# Build rimage
 			RIMAGE_DIR=build-rimage
 			cmake -B "$RIMAGE_DIR" -S modules/audio/sof/rimage
@@ -247,14 +275,15 @@ build_all()
 parse_args()
 {
 	local zeproj
-
+	unset zephyr_ref
 	local OPTIND=1
 
 	# Parse -options
-	while getopts "acj:k:p:" OPTION; do
+	while getopts "acz:j:k:p:" OPTION; do
 		case "$OPTION" in
 			a) PLATFORMS=("${SUPPORTED_PLATFORMS[@]}") ;;
 			c) DO_CLONE=yes ;;
+			z) zephyr_ref="$OPTARG" ;;
 			j) BUILD_JOBS="$OPTARG" ;;
 			k) RIMAGE_KEY_OPT="$OPTARG" ;;
 			p) zeproj="$OPTARG" ;;
@@ -269,6 +298,10 @@ parse_args()
 
 	if [ -n "$zeproj" ] && [ x"$DO_CLONE" = xyes ]; then
 	    die 'Cannot use -p with -c, -c supports %s only' "${SOF_TOP}/zephyrproject"
+	fi
+
+	if [ -n "$zephyr_ref" ] && [ -z "$DO_CLONE" ]; then
+	   die '%s' '-z without -c makes no sense'
 	fi
 
 	if [ -n "$zeproj" ]; then
@@ -346,7 +379,7 @@ see https://docs.zephyrproject.org/latest/getting_started/index.html"
 		# Resolve symlinks
 		mkdir "$zep"; WEST_TOP=$( cd "$zep" && /bin/pwd )
 
-		clone
+		west_init_update "${zephyr_ref}"
 
 	else
 		 # Look for Zephyr and define WEST_TOP
@@ -373,6 +406,12 @@ see https://docs.zephyrproject.org/latest/getting_started/index.html"
 		ln -s "$SOF_TOP" "${WEST_TOP}"/modules/audio/sof
 	}
 
+	test "${#PLATFORMS[@]}" -eq 0 || build_platforms
+}
+
+
+download_missing_submodules()
+{
 	# FIXME: remove this hack. Downloading and building should be
 	# kept separate but support for submodules in west is too
 	# recent, cannot rely on it yet.
@@ -391,8 +430,7 @@ see https://docs.zephyrproject.org/latest/getting_started/index.html"
 
 		git submodule update --init --recursive
 	)
-
-	test "${#PLATFORMS[@]}" -eq 0 || build_all
 }
+
 
 main "$@"

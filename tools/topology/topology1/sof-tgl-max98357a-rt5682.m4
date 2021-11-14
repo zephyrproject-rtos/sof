@@ -99,10 +99,25 @@ define(DMIC_DAI_LINK_16k_ID, `2')
 define(KWD_PIPE_SCH_DEADLINE_US, 5000)
 
 # if RTNR is defined, define DMIC16KPROC as rtnr
-ifdef(`RTNR',`', define(DMIC16KPROC, rtnr))
+ifdef(`RTNR',
+`define(DMICPROC, rtnr)',
+`ifdef(`DMICPROC', , `define(DMICPROC, eq-iir-volume)')')
+
+ifdef(`RTNR',
+`define(DMIC16KPROC, rtnr)',
+`ifdef(`DMIC16KPROC', , `define(DMIC16KPROC, eq-iir-volume)')')
 
 # include the generic dmic if RTNR is defined, else include generic dmic with kwd
 include(ifdef(`RTNR', platform/intel/intel-generic-dmic.m4, platform/intel/intel-generic-dmic-kwd.m4))
+
+ifdef(`BT_OFFLOAD', `
+# BT offload support
+define(`BT_PIPELINE_PB_ID', `13')
+define(`BT_PIPELINE_CP_ID', `14')
+define(`BT_DAI_LINK_ID', `8')
+define(`BT_PCM_ID', `7')
+define(`HW_CONFIG_ID', `8')
+include(`platform/intel/intel-generic-bt.m4')')
 
 dnl PIPELINE_PCM_ADD(pipeline,
 dnl     pipe id, pcm, max channels, format,
@@ -180,6 +195,22 @@ DAI_ADD(sof/pipe-dai-playback.m4,
 	PIPELINE_SOURCE_1, 2, FMT,
 	1000, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
 
+ifelse(CODEC, `MAX98390', `
+# Low Latency capture pipeline 9 on PCM 6 using max 4 channels of s32le.
+# Schedule 48 frames per 1000us deadline on core 0 with priority 0
+PIPELINE_PCM_ADD(sof/pipe-passthrough-capture.m4,
+	9, 6, 4, s32le,
+	1000, 0, 0,
+	48000, 48000, 48000)
+
+# capture DAI is SSP1 using 2 periods
+# Buffers use FMT format, with 48 frame per 1000us on core 0 with priority 0
+DAI_ADD(sof/pipe-dai-capture.m4,
+	9, SSP, SPK_SSP_INDEX, SPK_SSP_NAME,
+	PIPELINE_SINK_9, 2, FMT,
+	1000, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
+',
+`
 # currently this dai is here as "virtual" capture backend
 W_DAI_IN(SSP, SPK_SSP_INDEX, SPK_SSP_NAME, FMT, 3, 0)
 
@@ -210,6 +241,7 @@ SectionGraph."PIPE_CAP_VIRT" {
 		dapm(ECHO REF 9, SPK_REF_DAI_NAME)
 	]
 }
+')
 
 # playback DAI is SSP0 using 2 periods
 # Buffers use s24le format, with 48 frame per 1000us on core 0 with priority 0
@@ -282,12 +314,24 @@ ifelse(
 		SSP_CLOCK(fsync, 48000, codec_slave),
 		SSP_TDM(2, 16, 3, 3),
 		SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 16)))',
+	CODEC, `MAX98360A', `
+	SSP_CONFIG(I2S, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
+		SSP_CLOCK(bclk, 3072000, codec_slave),
+		SSP_CLOCK(fsync, 48000, codec_slave),
+		SSP_TDM(2, 32, 3, 3),
+		SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 32)))',
 	CODEC, `RT1011', `
 	SSP_CONFIG(DSP_A, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
 		SSP_CLOCK(bclk, 4800000, codec_slave),
 		SSP_CLOCK(fsync, 48000, codec_slave),
 		SSP_TDM(4, 25, 3, 15),
 		SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 24)))',
+	CODEC, `MAX98390', `
+	SSP_CONFIG(DSP_B, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
+		SSP_CLOCK(bclk, 6144000, codec_slave),
+		SSP_CLOCK(fsync, 48000, codec_slave),
+		SSP_TDM(4, 32, 3, 15),
+	SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 32)))',
 	)
 
 # SSP 0 (ID: 0)
@@ -296,7 +340,7 @@ DAI_CONFIG(SSP, 0, 0, SSP0-Codec,
 		SSP_CLOCK(bclk, 2400000, codec_slave),
 		SSP_CLOCK(fsync, 48000, codec_slave),
 		SSP_TDM(2, 25, 3, 3),
-		SSP_CONFIG_DATA(SSP, 0, 24)))
+		SSP_CONFIG_DATA(SSP, 0, 24, 0, 0, 0, SSP_CC_BCLK_ES)))
 
 # 4 HDMI/DP outputs (ID: 3,4,5,6)
 DAI_CONFIG(HDA, 0, 3, iDisp1,

@@ -34,6 +34,16 @@ static inline int arch_cpu_get_id(void)
 	return 0;
 }
 
+static inline int arch_cpu_restore_secondary_cores(void)
+{
+	return 0;
+}
+
+static inline int arch_cpu_secondary_cores_prepare_d0ix(void)
+{
+	return 0;
+}
+
 static inline void cpu_write_threadptr(int threadptr)
 {
 }

@@ -14,6 +14,7 @@
 #include <sof/lib/alloc.h>
 #include <sof/lib/clk.h>
 #include <sof/lib/cpu.h>
+#include <sof/lib/dai.h>
 #include <sof/lib/dma.h>
 #include <sof/lib/pm_runtime.h>
 #include <sof/lib/notifier.h>
@@ -27,6 +28,77 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+/*
+ * HD-Audio DMA programming sequence
+ *
+ * START stream (Playback):
+ * 1. Host sends the DAI_CONFIG IPC with SOF_DAI_CONFIG_FLAGS_2_STEP_STOP_PAUSE flag along with
+ *    SOF_DAI_CONFIG_FLAGS_HW_PARAMS
+ * 2. Host sets DGCS.RUN bit for link DMA. This step would be skipped if link DMA is already
+ *    running with mixer-based pipelines
+ * 3. Host sets DGCS.RUN bit for host DMA
+ * 4. Host sends the STREAM_TRIG_START IPC to the DSP
+ * 5. FW starts the pipeline and sets DGCS.GEN bit to 1
+ *
+ * START stream (Capture):
+ * 1. Host sends the DAI_CONFIG IPC with SOF_DAI_CONFIG_FLAGS_2_STEP_STOP_PAUSE flag along with
+ *    SOF_DAI_CONFIG_FLAGS_HW_PARAMS
+ * 2. Host sets DGCS.RUN bit for host DMA
+ * 3. Host sends the STREAM_TRIG_START IPC to the DSP
+ * 4. FW starts the pipeline and sets DGCS.GEN bit to 1
+ * 5. Host sets DGCS.RUN bit for link DMA
+ *
+ * PAUSE_PUSH an active stream (Playback):
+ * 1. Host sends the STREAM_TRIG_PAUSE IPC to the DSP
+ * 2. FW pauses the pipeline but keeps the DGCS.GEN bit set to 1 for host DMA
+ * 3. Host clears DGCS.RUN bit for host DMA
+ * 4. Host clears DGCS.RUN bit for link DMA
+ * 5. Host sends the DAI_CONFIG IPC with only the SOF_DAI_CONFIG_FLAGS_PAUSE command flag
+ * 6. FW clears the DGCS.GEN bit for link DMA
+ *
+ * PAUSE_PUSH an active stream (Capture):
+ * 1. Host clears DGCS.RUN bit for link DMA
+ * 2. Host sends the DAI_CONFIG IPC with only the SOF_DAI_CONFIG_FLAGS_PAUSE command flag
+ * 3. FW clears the DGCS.GEN bit for link DMA
+ * 4. Host sends the STREAM_TRIG_PAUSE IPC to the DSP
+ * 5. FW pauses the pipeline but keeps DGCS.GEN bit set to 1 for host DMA
+ * 6. Host clears DGCS.RUN bit for host DMA
+ *
+ * PAUSE_RELEASE a paused stream (Playback):
+ * 1. Host sets DGCS.RUN bit for link DMA
+ * 2. Host sets DGCS.RUN bit for host DMA
+ * 3. Host sends the STREAM_TRIG_PAUSE_RELEASE IPC to the DSP
+ * 4. FW releases the pipeline and sets the DGCS.GEN bit to 1
+ *
+ * PAUSE_RELEASE a paused stream (Capture):
+ * 1. Host sets DGCS.RUN bit for host DMA
+ * 2. Host sends the STREAM_TRIG_PAUSE_RELEASE IPC to the DSP
+ * 3. FW releases the pipeline and sets the DGCS.GEN bit to 1
+ * 4. Host sets DGCS.RUN bit for link DMA
+ *
+ * STOP an active/paused stream (Playback):
+ * 1. Host sends the STREAM_TRIG_STOP IPC to the DSP
+ * 2. FW stops the pipeline
+ * 3. Host clears the DGCS.RUN bit for host DMA
+ * 4. Host sends the PCM_FREE IPC
+ * 5. FW clears DGCS.GEN bit for host DMA during host component reset and checks DGCS.GBUSY bit
+ *    to ensure DMA is idle
+ * 6. Host clears DGCS.RUN bit for link DMA
+ * 7. Host sends the DAI_CONFIG IPC with the SOF_DAI_CONFIG_FLAGS_HW_FREE flag
+ * 8. FW clears the DGCS.GEN bit for link DMA and checks DGCS.GBUSY bit to ensure DMA is idle
+ *
+ * STOP an active/paused stream (Capture):
+ * 1. Host clears DGCS.RUN bit for link DMA
+ * 2. Host sends the DAI_CONFIG IPC with the SOF_DAI_CONFIG_FLAGS_HW_FREE flag
+ * 3. FW clears the DGCS.GEN bit for link DMA and checks GBUSY bit to ensure DMA is idle
+ * 4. Host sends the STREAM_TRIG_STOP IPC to the DSP
+ * 5. FW stops the pipeline
+ * 6. Host clears the DGCS.RUN bit for host DMA
+ * 7. Host sends the PCM_FREE IPC
+ * 8. FW clears DGCS.GEN bit for host DMA during host component reset and checks DGCS.GBUSY bit
+ *    to ensure DMA is idle
+ */
 
 /* ee12fa71-4579-45d7-bde2-b32c6893a122 */
 DECLARE_SOF_UUID("hda-dma", hda_dma_uuid, 0xee12fa71, 0x4579, 0x45d7,
@@ -57,6 +129,7 @@ DECLARE_TR_CTX(hdma_tr, SOF_UUID(hda_dma_uuid), LOG_LEVEL_INFO);
 #define DGCS_BF		BIT(9)  /* buffer full */
 #define DGCS_BNE	BIT(8)  /* buffer not empty */
 #define DGCS_FIFORDY	BIT(5)  /* enable FIFO */
+#define DGCS_GBUSY	BIT(15)  /* indicates if the DMA channel is idle or not */
 
 /* DGBBA */
 #define DGBBA_MASK	0xffff80
@@ -148,7 +221,7 @@ struct hda_chan_data {
 #endif
 };
 
-static int hda_dma_stop(struct dma_chan_data *channel);
+static int hda_dma_stop_common(struct dma_chan_data *channel);
 
 static inline void hda_dma_inc_fp(struct dma_chan_data *chan,
 				  uint32_t value)
@@ -558,7 +631,6 @@ static int hda_dma_release(struct dma_chan_data *channel)
 {
 	struct hda_chan_data *hda_chan = dma_chan_get_data(channel);
 	uint32_t flags;
-	int ret = 0;
 
 	irq_local_disable(flags);
 
@@ -568,33 +640,14 @@ static int hda_dma_release(struct dma_chan_data *channel)
 	hda_chan->state |= HDA_STATE_RELEASE;
 
 	irq_local_enable(flags);
-	return ret;
-}
-
-static int hda_dma_pause(struct dma_chan_data *channel)
-{
-	uint32_t flags;
-
-	irq_local_disable(flags);
-
-	tr_dbg(&hdma_tr, "hda-dmac: %d channel %d -> pause",
-	       channel->dma->plat_data.id, channel->index);
-
-	if (channel->status != COMP_STATE_ACTIVE)
-		goto out;
-
-	/* stop the channel */
-	hda_dma_stop(channel);
-
-out:
-	irq_local_enable(flags);
 	return 0;
 }
 
-static int hda_dma_stop(struct dma_chan_data *channel)
+static int hda_dma_stop_common(struct dma_chan_data *channel)
 {
+	struct dai_data *dd = channel->dev_data;
 	struct hda_chan_data *hda_chan;
-	uint32_t flags;
+	uint32_t flags, dgcs;
 
 	irq_local_disable(flags);
 
@@ -614,6 +667,17 @@ static int hda_dma_stop(struct dma_chan_data *channel)
 	} else {
 		dma_chan_reg_update_bits(channel, DGCS, DGCS_GEN, 0);
 	}
+
+	/* check if channel is idle. No need to wait after clearing the GEN bit */
+	if (dd && dd->delayed_dma_stop) {
+		dgcs = dma_chan_reg_read(channel, DGCS);
+		if (dgcs & DGCS_GBUSY) {
+			tr_err(&hdma_tr, "hda-dmac: %d channel %d not idle after stop",
+			       channel->dma->plat_data.id, channel->index);
+			irq_local_enable(flags);
+			return -EBUSY;
+		}
+	}
 	channel->status = COMP_STATE_PREPARE;
 	hda_chan = dma_chan_get_data(channel);
 	hda_chan->state = 0;
@@ -623,6 +687,40 @@ static int hda_dma_stop(struct dma_chan_data *channel)
 
 	irq_local_enable(flags);
 	return 0;
+}
+
+static int hda_dma_link_stop(struct dma_chan_data *channel)
+{
+	struct dai_data *dd = channel->dev_data;
+
+	if (!dd) {
+		tr_err(&hdma_tr, "hda-dmac: %d channel %d no device data",
+		       channel->dma->plat_data.id, channel->index);
+		return -EINVAL;
+	}
+
+	/*
+	 * The delayed_dma_stop flag will be set with the newer kernel and DMA will be stopped during
+	 * reset. With older kernel, the DMA will be stopped during the stop/pause trigger.
+	 */
+	if (!dd->delayed_dma_stop)
+		return hda_dma_stop_common(channel);
+
+	return 0;
+}
+
+static int hda_dma_link_pause(struct dma_chan_data *channel)
+{
+	/*
+	 * with two-step pause, DMA will be stopped when the DAI_CONFIG IPC is sent with the
+	 * SOF_DAI_CONFIG_FLAGS_TWO_STEP_STOP flag
+	 */
+	return hda_dma_link_stop(channel);
+}
+
+static int hda_dma_stop_delayed(struct dma_chan_data *channel)
+{
+	return hda_dma_stop_common(channel);
 }
 
 /* fill in "status" with current DMA channel state and position */
@@ -944,8 +1042,6 @@ unlock:
 static int hda_dma_get_attribute(struct dma *dma, uint32_t type,
 				 uint32_t *value)
 {
-	int ret = 0;
-
 	switch (type) {
 	case DMA_ATTR_BUFFER_ALIGNMENT:
 		*value = HDA_DMA_BUFFER_ALIGNMENT;
@@ -960,11 +1056,10 @@ static int hda_dma_get_attribute(struct dma *dma, uint32_t type,
 		*value = HDA_DMA_BUFFER_PERIOD_COUNT;
 		break;
 	default:
-		ret = -EINVAL;
-		break;
+		return -EINVAL;
 	}
 
-	return ret;
+	return 0;
 }
 
 static int hda_dma_interrupt(struct dma_chan_data *channel,
@@ -978,7 +1073,7 @@ const struct dma_ops hda_host_dma_ops = {
 	.channel_get		= hda_dma_channel_get,
 	.channel_put		= hda_dma_channel_put,
 	.start			= hda_dma_start,
-	.stop			= hda_dma_stop,
+	.stop_delayed		= hda_dma_stop_delayed,
 	.copy			= hda_dma_host_copy,
 	.status			= hda_dma_status,
 	.set_config		= hda_dma_set_config,
@@ -995,9 +1090,10 @@ const struct dma_ops hda_link_dma_ops = {
 	.channel_get		= hda_dma_channel_get,
 	.channel_put		= hda_dma_channel_put,
 	.start			= hda_dma_start,
-	.stop			= hda_dma_stop,
+	.stop			= hda_dma_link_stop,
+	.stop_delayed		= hda_dma_stop_delayed,
 	.copy			= hda_dma_link_copy,
-	.pause			= hda_dma_pause,
+	.pause			= hda_dma_link_pause,
 	.release		= hda_dma_release,
 	.status			= hda_dma_status,
 	.set_config		= hda_dma_set_config,

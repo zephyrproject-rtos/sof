@@ -170,11 +170,8 @@ int ipc_platform_compact_read_msg(ipc_cmd_hdr *hdr, int words)
 }
 #endif
 
-enum task_state ipc_platform_do_cmd(void *data)
+enum task_state ipc_platform_do_cmd(struct ipc *ipc)
 {
-#if !CONFIG_SUECREEK
-	struct ipc *ipc = data;
-#endif
 	ipc_cmd_hdr *hdr;
 
 #if CAVS_VERSION >= CAVS_VERSION_1_8
@@ -182,30 +179,22 @@ enum task_state ipc_platform_do_cmd(void *data)
 #else
 	hdr = mailbox_validate();
 #endif
+
 	/* perform command */
 	ipc_cmd(hdr);
 
 	/* are we about to enter D3 ? */
-#if !CONFIG_SUECREEK
 	if (ipc->pm_prepare_D3) {
 
 		/* no return - memory will be powered off and IPC sent */
 		platform_pm_runtime_power_off();
 	}
 
-#endif
-
 	return SOF_TASK_STATE_COMPLETED;
 }
 
-void ipc_platform_complete_cmd(void *data)
+void ipc_platform_complete_cmd(struct ipc *ipc)
 {
-	struct ipc *ipc = data;
-
-	if (!cpu_is_me(ipc->core))
-		return;
-
-
 	/* write 1 to clear busy, and trigger interrupt to host*/
 #if CAVS_VERSION == CAVS_VERSION_1_5
 	ipc_write(IPC_DIPCT, ipc_read(IPC_DIPCT) | IPC_DIPCT_BUSY);
@@ -220,14 +209,6 @@ void ipc_platform_complete_cmd(void *data)
 
 	/* unmask Busy interrupt */
 	ipc_write(IPC_DIPCCTL, ipc_read(IPC_DIPCCTL) | IPC_DIPCCTL_IPCTBIE);
-
-#if CONFIG_SUECREEK
-	if (ipc->pm_prepare_D3) {
-		//TODO: add support for Icelake
-		while (1)
-			wait_for_interrupt(0);
-	}
-#endif
 }
 
 int ipc_platform_send_msg(struct ipc_msg *msg)

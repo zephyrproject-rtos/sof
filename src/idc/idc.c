@@ -17,6 +17,7 @@
 #include <sof/lib/cpu.h>
 #include <sof/lib/memory.h>
 #include <sof/lib/notifier.h>
+#include <sof/lib/pm_runtime.h>
 #include <sof/lib/uuid.h>
 #include <sof/platform.h>
 #include <arch/lib/wait.h>
@@ -123,9 +124,6 @@ static void idc_ipc(void)
 	struct ipc *ipc = ipc_get();
 
 	ipc_cmd(ipc->comp_data);
-
-	/* Signal the host */
-	ipc_complete_cmd(ipc);
 }
 
 /**
@@ -264,8 +262,17 @@ static int idc_reset(uint32_t comp_id)
 
 	ret = comp_reset(ipc_dev->cd);
 
-
 	return ret;
+}
+
+static void idc_prepare_d0ix(void)
+{
+	/* set prepare_d0ix flag, which indicates that in the next
+	 * platform_wait_for_interrupt invocation(), core should get ready for
+	 * d0ix power down - it is required by D0->D0ix flow, when primary
+	 * core disables all secondary cores.
+	 */
+	platform_pm_runtime_prepare_d0ix_en(cpu_get_id());
 }
 
 /**
@@ -279,7 +286,7 @@ void idc_cmd(struct idc_msg *msg)
 
 	switch (type) {
 	case iTS(IDC_MSG_POWER_DOWN):
-		cpu_power_down_core();
+		cpu_power_down_core(0);
 		break;
 	case iTS(IDC_MSG_NOTIFY):
 		notifier_notify_remote();
@@ -299,6 +306,9 @@ void idc_cmd(struct idc_msg *msg)
 	case iTS(IDC_MSG_RESET):
 		ret = idc_reset(msg->extension);
 		break;
+	case iTS(IDC_MSG_PREPARE_D0ix):
+		idc_prepare_d0ix();
+		break;
 	default:
 		tr_err(&idc_tr, "idc_cmd(): invalid msg->header = %u",
 		       msg->header);
@@ -306,6 +316,25 @@ void idc_cmd(struct idc_msg *msg)
 
 	idc_msg_status_set(ret, cpu_get_id());
 }
+
+#ifndef __ZEPHYR__
+static void idc_complete(void *data)
+{
+	struct ipc *ipc = ipc_get();
+	struct idc *idc = data;
+	uint32_t type = iTS(idc->received_msg.header);
+	uint32_t flags;
+
+	switch (type) {
+	case iTS(IDC_MSG_IPC):
+		/* Signal the host */
+		spin_lock_irq(&ipc->lock, flags);
+		ipc->task_mask &= ~IPC_TASK_SECONDARY_CORE;
+		ipc_complete_cmd(ipc);
+		spin_unlock_irq(&ipc->lock, flags);
+	}
+}
+#endif
 
 /* Runs on each CPU */
 int idc_init(void)
@@ -315,6 +344,7 @@ int idc_init(void)
 	struct task_ops ops = {
 		.run = idc_do_cmd,
 		.get_deadline = ipc_task_deadline,
+		.complete = idc_complete,
 	};
 #endif
 
@@ -335,4 +365,24 @@ int idc_init(void)
 
 	return 0;
 #endif
+}
+
+int idc_restore(void)
+{
+	struct idc **idc = idc_get();
+
+	tr_info(&idc_tr, "idc_restore()");
+
+	/* idc_restore() is invoked during D0->D0ix/D0ix->D0 flow. In that
+	 * case basic core structures e.g. idc struct should be already
+	 * allocated (in D0->D0ix primary core disables all secondary cores, but
+	 * memory has not been powered off).
+	 */
+	assert(*idc);
+
+#ifndef __ZEPHYR__
+	return platform_idc_restore();
+#endif
+
+	return 0;
 }

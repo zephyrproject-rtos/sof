@@ -29,6 +29,7 @@
 #include <ipc4/module.h>
 #include <ipc4/error_status.h>
 #include <ipc4/gateway.h>
+#include <ipc4/fw_reg.h>
 #include <ipc/dai.h>
 #include <user/trace.h>
 #include <errno.h>
@@ -48,6 +49,12 @@ struct copier_data {
 	struct ipc4_copier_module_cfg config;
 	struct comp_dev *endpoint;
 	int direction;
+	/* sample data >> attenuation in range of [1 - 31] */
+	uint32_t attenuation;
+
+	/* pipeline register offset in memory windows 0 */
+	uint32_t pipeline_reg_offset;
+	uint64_t host_position;
 
 	struct ipc4_audio_format out_fmt[IPC4_COPIER_MODULE_OUTPUT_PINS_COUNT];
 	pcm_converter_func converter[IPC4_COPIER_MODULE_OUTPUT_PINS_COUNT];
@@ -147,7 +154,7 @@ static struct comp_dev *create_dai(struct comp_ipc_config *config,
 	case ipc4_alh_link_input_class:
 		dai.type = SOF_DAI_INTEL_ALH;
 		dai.is_config_blob = true;
-		dai.dai_index -= IPC4_ALH_MAX_NUMBER_OF_GTW;
+		dai.dai_index -= IPC4_ALH_DAI_INDEX_OFFSET;
 		break;
 	case ipc4_dmic_link_input_class:
 		dai.type = SOF_DAI_INTEL_DMIC;
@@ -176,6 +183,27 @@ static struct comp_dev *create_dai(struct comp_ipc_config *config,
 		return NULL;
 
 	return dev;
+}
+
+static void init_pipeline_reg(struct copier_data *cd)
+{
+	union ipc4_connector_node_id node_id;
+	struct ipc4_pipeline_registers pipe_reg;
+	int gateway_id;
+
+	node_id.dw = cd->config.gtw_cfg.node_id;
+	gateway_id = node_id.f.v_index;
+
+	/* pipeline position is stored in memory windows 0 at the following offset
+	 * please check struct ipc4_fw_registers definition. The number of
+	 * pipeline reg depends on the host dma count for playback
+	 */
+	cd->pipeline_reg_offset = offsetof(struct ipc4_fw_registers, pipeline_regs);
+	cd->pipeline_reg_offset += gateway_id * sizeof(struct ipc4_pipeline_registers);
+
+	pipe_reg.stream_start_offset = (uint64_t)-1;
+	pipe_reg.stream_end_offset = (uint64_t)-1;
+	mailbox_sw_regs_write(cd->pipeline_reg_offset, &pipe_reg, sizeof(pipe_reg));
 }
 
 static struct comp_dev *copier_new(const struct comp_driver *drv,
@@ -246,6 +274,8 @@ static struct comp_dev *copier_new(const struct comp_driver *drv,
 			else
 				ipc_pipe->pipeline->sink_comp = dev;
 
+			init_pipeline_reg(cd);
+
 			break;
 		case ipc4_hda_link_output_class:
 		case ipc4_hda_link_input_class:
@@ -306,7 +336,7 @@ static bool use_no_container_convert_function(enum sof_ipc_frame in,
 					      enum sof_ipc_frame valid_out_bits)
 {
 	/* valid sample size is equal to container size, go normal path */
-	if (in == valid_in_bits && out == valid_out_bits)
+	if (in == out && valid_in_bits == valid_out_bits)
 		return true;
 
 	/* go normal path for S24_4LE case since container is always 32 bits */
@@ -378,6 +408,7 @@ static int copier_prepare(struct comp_dev *dev)
 static int copier_reset(struct comp_dev *dev)
 {
 	struct copier_data *cd = comp_get_drvdata(dev);
+	struct ipc4_pipeline_registers pipe_reg;
 	int ret = 0;
 
 	comp_dbg(dev, "copier_reset()");
@@ -390,6 +421,13 @@ static int copier_reset(struct comp_dev *dev)
 	if (cd->endpoint)
 		ret = cd->endpoint->drv->ops.reset(cd->endpoint);
 
+	if (cd->pipeline_reg_offset) {
+		pipe_reg.stream_start_offset = (uint64_t)-1;
+		pipe_reg.stream_end_offset = (uint64_t)-1;
+		mailbox_sw_regs_write(cd->pipeline_reg_offset, &pipe_reg, sizeof(pipe_reg));
+	}
+
+	memset(cd, 0, sizeof(cd));
 	comp_set_state(dev, COMP_TRIGGER_RESET);
 
 	return ret;
@@ -409,13 +447,53 @@ static int copier_comp_trigger(struct comp_dev *dev, int cmd)
 	if (cd->endpoint)
 		ret = cd->endpoint->drv->ops.trigger(cd->endpoint, cmd);
 
+	if (ret < 0 || !cd->endpoint || !cd->pipeline_reg_offset)
+		return ret;
+
+	/* update stream start addr for running message in host copier*/
+	if (dev->state != COMP_STATE_ACTIVE && cmd == COMP_TRIGGER_START) {
+		struct ipc4_pipeline_registers pipe_reg;
+
+		pipe_reg.stream_start_offset = 0;
+		pipe_reg.stream_end_offset = 0;
+		mailbox_sw_regs_write(cd->pipeline_reg_offset, &pipe_reg, sizeof(pipe_reg));
+	}
+
 	return ret;
+}
+
+static inline int apply_attenuation(struct comp_dev *dev, struct copier_data *cd,
+				    struct comp_buffer *sink, int frame)
+{
+	uint32_t buff_frag = 0;
+	uint32_t *dst;
+	int i;
+
+	/* only support attenuation in format of 32bit */
+	switch (sink->stream.frame_fmt) {
+	case SOF_IPC_FRAME_S16_LE:
+		comp_err(dev, "16bit sample isn't supported by attenuation");
+		return -EINVAL;
+	case SOF_IPC_FRAME_S24_4LE:
+	case SOF_IPC_FRAME_S32_LE:
+		for (i = 0; i < frame * sink->stream.channels; i++) {
+			dst = audio_stream_read_frag_s32(&sink->stream, buff_frag);
+			*dst >>= cd->attenuation;
+			buff_frag++;
+		}
+		return 0;
+	default:
+		comp_err(dev, "unsupported format %d for attenuation", sink->stream.frame_fmt);
+		return -EINVAL;
+	}
 }
 
 /* copy and process stream data from source to sink buffers */
 static int copier_copy(struct comp_dev *dev)
 {
 	struct copier_data *cd = comp_get_drvdata(dev);
+	struct ipc4_pipeline_registers pipe_reg;
+	struct sof_ipc_stream_posn posn;
 	int ret;
 
 	comp_dbg(dev, "copier_copy()");
@@ -443,9 +521,16 @@ static int copier_copy(struct comp_dev *dev)
 			sink_bytes = c.frames * c.sink_frame_bytes;
 
 			i = IPC4_SINK_QUEUE_ID(sink->id);
-			buffer_invalidate(src, src_bytes);
-			cd->converter[i](&src->stream, 0, &sink->stream, 0, c.frames);
-			buffer_writeback(sink, sink_bytes);
+			buffer_stream_invalidate(src, src_bytes);
+			cd->converter[i](&src->stream, 0, &sink->stream, 0,
+					 c.frames * sink->stream.channels);
+			if (cd->attenuation > 0) {
+				ret = apply_attenuation(dev, cd, sink, c.frames);
+				if (ret < 0)
+					return ret;
+			}
+
+			buffer_stream_writeback(sink, sink_bytes);
 
 			comp_update_buffer_produce(sink, sink_bytes);
 		}
@@ -453,6 +538,15 @@ static int copier_copy(struct comp_dev *dev)
 		comp_update_buffer_consume(src, src_bytes);
 		ret = 0;
 	}
+
+	if (ret < 0 || !cd->endpoint || !cd->pipeline_reg_offset)
+		return ret;
+
+	comp_position(cd->endpoint, &posn);
+	cd->host_position += posn.host_posn;
+	pipe_reg.stream_start_offset = cd->host_position;
+	pipe_reg.stream_end_offset = 0;
+	mailbox_sw_regs_write(cd->pipeline_reg_offset, &pipe_reg, sizeof(pipe_reg));
 
 	return ret;
 }
@@ -540,7 +634,7 @@ static int copier_params(struct comp_dev *dev, struct sof_ipc_stream_params *par
 	return ret;
 }
 
-static int copier_set_sink_fmt(struct comp_dev *dev, int cmd, void *data,
+static int copier_set_sink_fmt(struct comp_dev *dev, void *data,
 			       int max_data_size)
 {
 	struct ipc4_copier_config_set_sink_format *sink_fmt;
@@ -573,14 +667,53 @@ static int copier_set_sink_fmt(struct comp_dev *dev, int cmd, void *data,
 	return 0;
 }
 
-static int copier_cmd(struct comp_dev *dev, int cmd, void *data,
-		      int max_data_size)
+static int set_attenuation(struct comp_dev *dev, uint32_t data_offset, char *data)
 {
-	comp_dbg(dev, "copier_cmd()");
+	struct copier_data *cd = comp_get_drvdata(dev);
+	struct comp_buffer *sink;
+	struct list_item *sink_list;
+	uint32_t attenuation;
 
-	switch (cmd) {
+	/* only support attenuation in format of 32bit */
+	if (data_offset > sizeof(uint32_t)) {
+		comp_err(dev, "attenuation data size %d is incorrect", data_offset);
+		return -EINVAL;
+	}
+
+	dcache_invalidate_region(data, sizeof(uint32_t));
+	attenuation = *(uint32_t *)data;
+	if (attenuation > 31) {
+		comp_err(dev, "attenuation %d is out of range", attenuation);
+		return -EINVAL;
+	}
+
+	list_for_item(sink_list, &dev->bsink_list) {
+		sink = container_of(sink_list, struct comp_buffer, source_list);
+		if (sink->buffer_fmt < SOF_IPC_FRAME_S24_4LE) {
+			comp_err(dev, "sink %d in format %d isn't supported by attenuation",
+				 sink->id, sink->buffer_fmt);
+			return -EINVAL;
+		}
+	}
+
+	cd->attenuation = attenuation;
+
+	return 0;
+}
+
+static int copier_set_large_config(struct comp_dev *dev, uint32_t param_id,
+				   bool first_block,
+				   bool last_block,
+				   uint32_t data_offset,
+				   char *data)
+{
+	comp_dbg(dev, "copier_set_large_config()");
+
+	switch (param_id) {
 	case IPC4_COPIER_MODULE_CFG_PARAM_SET_SINK_FORMAT:
-		return copier_set_sink_fmt(dev, cmd, data, max_data_size);
+		return copier_set_sink_fmt(dev, data, data_offset);
+	case IPC4_COPIER_MODULE_CFG_ATTENUATION:
+		return set_attenuation(dev, data_offset, data);
 	default:
 		return -EINVAL;
 	}
@@ -594,7 +727,7 @@ static const struct comp_driver comp_copier = {
 		.free			= copier_free,
 		.trigger		= copier_comp_trigger,
 		.copy			= copier_copy,
-		.cmd			= copier_cmd,
+		.set_large_config	= copier_set_large_config,
 		.params			= copier_params,
 		.prepare		= copier_prepare,
 		.reset			= copier_reset,

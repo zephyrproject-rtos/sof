@@ -56,13 +56,8 @@ DECLARE_TR_CTX(zephyr_tr, SOF_UUID(zephyr_uuid), LOG_LEVEL_INFO);
 
 /* The Zephyr heap */
 
-/* use cached heap for non-shared allocations */
-/*#define ENABLE_CACHED_HEAP 1*/
-
 #ifdef CONFIG_IMX
 #define HEAPMEM_SIZE		(HEAP_SYSTEM_SIZE + HEAP_RUNTIME_SIZE + HEAP_BUFFER_SIZE)
-
-#undef ENABLE_CACHED_HEAP
 
 /*
  * Include heapmem variable in .heap_mem section, otherwise the HEAPMEM_SIZE is
@@ -72,39 +67,9 @@ __section(".heap_mem") static uint8_t __aligned(64) heapmem[HEAPMEM_SIZE];
 
 #else
 
-/*
- * TODO: heap size should be set based on Zephyr linker output.
- * At the moment, the HEAP_SIZEs are approximations from the XTOS linker scripts
- * (e.g. src/platform/apollolake/apollolake.x.in for APL):
- * (_bss_end - _runtime_heap_start)
- */
-#if (CONFIG_HP_MEMORY_BANKS < 16)
-/* e.g. APL */
-#define	HEAP_SIZE	0x30000
-#elif (CONFIG_HP_MEMORY_BANKS < 30)
-/* e.g. JSL */
-#define	HEAP_SIZE	0x80000
-#elif (CONFIG_HP_MEMORY_BANKS < 45)
-/* e.g. TGL-H */
-#define	HEAP_SIZE	0x100000
-#else
-/* e.g. CNL/ICL/TGL */
-#define	HEAP_SIZE	0x200000
-#endif
-
-#ifdef ENABLE_CACHED_HEAP
-/* hard code the cached portion at the moment */
-#define	HEAP_SYSTEM_CACHED_SIZE	(HEAP_SIZE / 2)
-#else
-#define	HEAP_SYSTEM_CACHED_SIZE	0
-#endif
-#define	HEAPMEM_SIZE	(HEAP_SIZE - HEAP_SYSTEM_CACHED_SIZE)
-
-static uint8_t __aligned(PLATFORM_DCACHE_ALIGN)heapmem[HEAPMEM_SIZE];
-#ifdef ENABLE_CACHED_HEAP
-static uint8_t __aligned(PLATFORM_DCACHE_ALIGN)heapmem_cached[HEAP_SYSTEM_CACHED_SIZE];
-static struct k_heap sof_heap_cached;
-#endif
+extern uint8_t _end, _heap_sentry;
+#define heapmem ((uint8_t *)ALIGN_UP((uintptr_t)&_end, PLATFORM_DCACHE_ALIGN))
+#define HEAPMEM_SIZE (&_heap_sentry - heapmem)
 
 #endif
 
@@ -115,22 +80,19 @@ static int statics_init(const struct device *unused)
 	ARG_UNUSED(unused);
 
 	sys_heap_init(&sof_heap.heap, heapmem, HEAPMEM_SIZE);
-#ifdef ENABLE_CACHED_HEAP
-	sys_heap_init(&sof_heap_cached.heap, heapmem_cached, HEAP_SYSTEM_CACHED_SIZE);
-#endif
+
 	return 0;
 }
 
 SYS_INIT(statics_init, PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_OBJECTS);
 
-static void *heap_alloc_aligned(struct k_heap *h, size_t align, size_t bytes)
+static void *heap_alloc_aligned(struct k_heap *h, size_t min_align, size_t bytes)
 {
-	void *ret = NULL;
+	k_spinlock_key_t key;
+	void *ret;
 
-	k_spinlock_key_t key = k_spin_lock(&h->lock);
-
-	ret = sys_heap_aligned_alloc(&h->heap, align, bytes);
-
+	key = k_spin_lock(&h->lock);
+	ret = sys_heap_aligned_alloc(&h->heap, min_align, bytes);
 	k_spin_unlock(&h->lock, key);
 
 	return ret;
@@ -138,9 +100,6 @@ static void *heap_alloc_aligned(struct k_heap *h, size_t align, size_t bytes)
 
 static void *heap_alloc_aligned_cached(struct k_heap *h, size_t min_align, size_t bytes)
 {
-#ifdef ENABLE_CACHED_HEAP
-	unsigned int align = MAX(PLATFORM_DCACHE_ALIGN, min_align);
-	unsigned int aligned_size = ALIGN_UP(bytes, align);
 	void *ptr;
 
 	/*
@@ -148,28 +107,38 @@ static void *heap_alloc_aligned_cached(struct k_heap *h, size_t min_align, size_
 	 * heap allocation. To ensure no allocated cached buffer
 	 * overlaps the same cacheline with the metadata chunk,
 	 * align both allocation start and size of allocation
-	 * to cacheline.
+	 * to cacheline. As cached and non-cached allocations are
+	 * mixed, same rules need to be followed for both type of
+	 * allocations.
 	 */
-	ptr = heap_alloc_aligned(h, align, aligned_size);
-	if (ptr) {
-		ptr = uncache_to_cache(ptr);
+#ifdef CONFIG_SOF_ZEPHYR_HEAP_CACHED
+	min_align = MAX(PLATFORM_DCACHE_ALIGN, min_align);
+	bytes = ALIGN_UP(bytes, min_align);
+#endif
 
-		/*
-		 * Heap can be used by different cores, so cache
-		 * needs to be invalidated before next user
-		 */
-		z_xtensa_cache_inv(ptr, aligned_size);
-	}
+	ptr = heap_alloc_aligned(h, min_align, bytes);
+
+#ifdef CONFIG_SOF_ZEPHYR_HEAP_CACHED
+	if (ptr)
+		ptr = z_soc_cached_ptr(ptr);
+#endif
 
 	return ptr;
-#else
-	return heap_alloc_aligned(&sof_heap, min_align, bytes);
-#endif
 }
 
 static void heap_free(struct k_heap *h, void *mem)
 {
 	k_spinlock_key_t key = k_spin_lock(&h->lock);
+#ifdef CONFIG_SOF_ZEPHYR_HEAP_CACHED
+	void *mem_uncached;
+
+	if (is_cached(mem)) {
+		mem_uncached = z_soc_uncached_ptr(mem);
+		z_xtensa_cache_flush_inv(mem, sys_heap_usable_size(&h->heap, mem_uncached));
+
+		mem = mem_uncached;
+	}
+#endif
 
 	sys_heap_free(&h->heap, mem);
 
@@ -178,26 +147,39 @@ static void heap_free(struct k_heap *h, void *mem)
 
 static inline bool zone_is_cached(enum mem_zone zone)
 {
-#ifndef ENABLE_CACHED_HEAP
-	return false;
-#endif
-
-	if (zone == SOF_MEM_ZONE_BUFFER)
+#ifdef CONFIG_SOF_ZEPHYR_HEAP_CACHED
+	switch (zone) {
+	case SOF_MEM_ZONE_SYS:
+	case SOF_MEM_ZONE_SYS_RUNTIME:
+	case SOF_MEM_ZONE_RUNTIME:
+	case SOF_MEM_ZONE_BUFFER:
 		return true;
+	default:
+		break;
+	}
+#endif
 
 	return false;
 }
 
 void *rmalloc(enum mem_zone zone, uint32_t flags, uint32_t caps, size_t bytes)
 {
-	if (zone_is_cached(zone))
-		return heap_alloc_aligned_cached(&sof_heap, 0, bytes);
+	void *ptr;
 
-#ifdef ENABLE_CACHED_HEAP
-	return heap_alloc_aligned(&sof_heap_shared, 8, bytes);
-#else
-	return heap_alloc_aligned(&sof_heap, 8, bytes);
-#endif
+	if (zone_is_cached(zone)) {
+		ptr = heap_alloc_aligned_cached(&sof_heap, 0, bytes);
+	} else {
+		/*
+		 * XTOS alloc implementation has used dcache alignment,
+		 * so SOF application code is expecting this behaviour.
+		 */
+		ptr = heap_alloc_aligned(&sof_heap, PLATFORM_DCACHE_ALIGN, bytes);
+	}
+
+	if (!ptr && zone == SOF_MEM_ZONE_SYS)
+		k_panic();
+
+	return ptr;
 }
 
 /* Use SOF_MEM_ZONE_BUFFER at the moment */
@@ -270,16 +252,6 @@ void rfree(void *ptr)
 {
 	if (!ptr)
 		return;
-
-#ifdef ENABLE_CACHED_HEAP
-	/* select heap based on address range */
-	if (is_uncached(ptr)) {
-		heap_free(&sof_heap_shared, ptr);
-		return;
-	}
-
-	ptr = cache_to_uncache(ptr);
-#endif
 
 	heap_free(&sof_heap, ptr);
 }
@@ -758,6 +730,18 @@ int arch_cpu_enable_core(int id)
 	return 0;
 }
 
+int arch_cpu_restore_secondary_cores(void)
+{
+	/* TODO: use Zephyr version */
+	return 0;
+}
+
+int arch_cpu_secondary_cores_prepare_d0ix(void)
+{
+	/* TODO: use Zephyr version */
+	return 0;
+}
+
 void arch_cpu_disable_core(int id)
 {
 	/* TODO: call Zephyr API */
@@ -768,7 +752,7 @@ int arch_cpu_is_core_enabled(int id)
 	return arch_cpu_active(id);
 }
 
-void cpu_power_down_core(void)
+void cpu_power_down_core(uint32_t flags)
 {
 	/* TODO: use Zephyr version */
 }

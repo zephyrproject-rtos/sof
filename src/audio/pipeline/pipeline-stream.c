@@ -61,77 +61,6 @@ pipeline_should_report_enodata_on_trigger(struct comp_dev *rsrc,
 	return false;
 }
 
-/* Runs in IPC or in pipeline task context */
-static int pipeline_comp_trigger(struct comp_dev *current,
-				 struct comp_buffer *calling_buf,
-				 struct pipeline_walk_context *ctx, int dir)
-{
-	struct pipeline_data *ppl_data = ctx->comp_data;
-	bool is_single_ppl = comp_is_single_pipeline(current, ppl_data->start);
-	bool is_same_sched, async;
-	int err;
-
-	pipe_dbg(current->pipeline,
-		 "pipeline_comp_trigger(), current->comp.id = %u, dir = %u",
-		 dev_comp_id(current), dir);
-
-	switch (ppl_data->cmd) {
-	case COMP_TRIGGER_PAUSE:
-	case COMP_TRIGGER_STOP:
-		/*
-		 * PAUSE and STOP are triggered in IPC context, not from the
-		 * pipeline task
-		 */
-		async = true;
-		break;
-	case COMP_TRIGGER_PRE_RELEASE:
-	case COMP_TRIGGER_PRE_START:
-		if (comp_get_endpoint_type(current) == COMP_ENDPOINT_DAI) {
-			struct dai_data *dd = comp_get_drvdata(current);
-
-			ppl_data->delay_ms = dai_get_init_delay_ms(dd->dai);
-		}
-
-		COMPILER_FALLTHROUGH;
-	case COMP_TRIGGER_RELEASE:
-	case COMP_TRIGGER_START:
-		async = !pipeline_is_timer_driven(current->pipeline);
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	is_same_sched = pipeline_is_same_sched_comp(current->pipeline,
-						    ppl_data->start->pipeline);
-
-	/* trigger should propagate to the connected pipelines,
-	 * which need to be scheduled together
-	 */
-	if (!is_single_ppl && !is_same_sched) {
-		pipe_dbg(current->pipeline,
-			 "pipeline_comp_trigger(), current is from another pipeline");
-
-		if (pipeline_should_report_enodata_on_trigger(current, ctx, dir))
-			return -ENODATA;
-
-		return 0;
-	}
-
-	/* send command to the component and update pipeline state */
-	err = comp_trigger(current, ppl_data->cmd);
-	if (err < 0 || err == PPL_STATUS_PATH_STOP)
-		return err;
-
-	/*
-	 * Add scheduling components to the list. This is only needed for the
-	 * stopping flow.
-	 */
-	if (async)
-		pipeline_comp_trigger_sched_comp(current->pipeline, current, ctx);
-
-	return pipeline_for_each_comp(current, ctx, dir);
-}
-
 static int pipeline_comp_copy(struct comp_dev *current,
 			      struct comp_buffer *calling_buf,
 			      struct pipeline_walk_context *ctx, int dir)
@@ -309,14 +238,22 @@ int pipeline_trigger(struct pipeline *p, struct comp_dev *host, int cmd)
 
 	pipe_info(p, "pipe trigger cmd %d", cmd);
 
+	p->trigger.aborted = false;
+
 	switch (cmd) {
 	case COMP_TRIGGER_PAUSE:
 	case COMP_TRIGGER_STOP:
-		/* Execute immediately */
-		ret = pipeline_trigger_run(p, host, cmd);
-		return ret == PPL_STATUS_PATH_STOP ? 0 : ret;
+		if (p->status == COMP_STATE_PAUSED || p->xrun_bytes) {
+			/* The task isn't running, trigger inline */
+			ret = pipeline_trigger_run(p, host, cmd);
+			return ret < 0 ? ret : 0;
+		}
+
+		COMPILER_FALLTHROUGH;
 	case COMP_TRIGGER_XRUN:
-		pipeline_trigger_xrun(p, &host);
+		if (cmd == COMP_TRIGGER_XRUN)
+			pipeline_trigger_xrun(p, &host);
+
 		COMPILER_FALLTHROUGH;
 	case COMP_TRIGGER_PRE_RELEASE:
 	case COMP_TRIGGER_PRE_START:
@@ -324,11 +261,86 @@ int pipeline_trigger(struct pipeline *p, struct comp_dev *host, int cmd)
 		ret = pipeline_trigger_list(p, host, cmd);
 		if (ret < 0)
 			return ret;
-		/* IPC response will be sent from the task */
+		/* IPC response will be sent from the task, unless it was paused */
 		return 1;
 	}
 
 	return 0;
+}
+
+/* Runs in IPC or in pipeline task context */
+static int pipeline_comp_trigger(struct comp_dev *current,
+				 struct comp_buffer *calling_buf,
+				 struct pipeline_walk_context *ctx, int dir)
+{
+	struct pipeline_data *ppl_data = ctx->comp_data;
+	bool is_single_ppl = comp_is_single_pipeline(current, ppl_data->start);
+	bool is_same_sched;
+	int err;
+
+	pipe_dbg(current->pipeline,
+		 "pipeline_comp_trigger(), current->comp.id = %u, dir = %u",
+		 dev_comp_id(current), dir);
+
+	switch (ppl_data->cmd) {
+	case COMP_TRIGGER_PRE_RELEASE:
+	case COMP_TRIGGER_PRE_START:
+		if (comp_get_endpoint_type(current) == COMP_ENDPOINT_DAI) {
+			struct dai_data *dd = comp_get_drvdata(current);
+
+			ppl_data->delay_ms = dai_get_init_delay_ms(dd->dai);
+		}
+		break;
+	default:
+		return -EINVAL;
+	case COMP_TRIGGER_PAUSE:
+	case COMP_TRIGGER_STOP:
+	case COMP_TRIGGER_RELEASE:
+	case COMP_TRIGGER_START:
+		break;
+	}
+
+	is_same_sched = pipeline_is_same_sched_comp(current->pipeline,
+						    ppl_data->start->pipeline);
+
+	/* trigger should propagate to the connected pipelines,
+	 * which need to be scheduled together
+	 */
+	if (!is_single_ppl && !is_same_sched) {
+		pipe_dbg(current->pipeline,
+			 "pipeline_comp_trigger(), current is from another pipeline");
+
+		if (pipeline_should_report_enodata_on_trigger(current, ctx, dir))
+			return -ENODATA;
+
+		return 0;
+	}
+
+	/* send command to the component and update pipeline state */
+	err = comp_trigger(current, ppl_data->cmd);
+	if (err < 0)
+		return err;
+
+	if (err == PPL_STATUS_PATH_STOP) {
+		current->pipeline->trigger.aborted = true;
+		return err;
+	}
+
+	switch (ppl_data->cmd) {
+	case COMP_TRIGGER_PAUSE:
+	case COMP_TRIGGER_STOP:
+		if (pipeline_is_timer_driven(current->pipeline))
+			current->pipeline->status = COMP_STATE_PAUSED;
+	}
+
+	/*
+	 * Add scheduling components to the list. This is only needed for
+	 * asynchronous flows.
+	 */
+	if (!pipeline_is_timer_driven(current->pipeline))
+		pipeline_comp_trigger_sched_comp(current->pipeline, current, ctx);
+
+	return pipeline_for_each_comp(current, ctx, dir);
 }
 
 /* actually execute pipeline trigger, including components: either in IPC or in task context */
@@ -348,6 +360,7 @@ int pipeline_trigger_run(struct pipeline *p, struct comp_dev *host, int cmd)
 	pipe_dbg(p, "execute trigger cmd %d on pipe %u", cmd, p->pipeline_id);
 
 	list_init(&walk_ctx.pipelines);
+	p->trigger.aborted = false;
 
 	/* handle pipeline global checks before going into each components */
 	if (p->xrun_bytes) {
@@ -383,7 +396,7 @@ int pipeline_trigger_run(struct pipeline *p, struct comp_dev *host, int cmd)
 			p->trigger.delay = (data.delay_ms * 1000 + p->period - 1) / p->period;
 			p->trigger.cmd = data.cmd;
 
-			return ret;
+			return 0;
 		}
 
 		list_init(&walk_ctx.pipelines);
@@ -394,8 +407,10 @@ int pipeline_trigger_run(struct pipeline *p, struct comp_dev *host, int cmd)
 
 		ret = walk_ctx.comp_func(host, NULL, &walk_ctx, host->direction);
 		if (ret < 0)
-			pipe_err(p, "pipeline_trigger(): ret = %d, host->comp.id = %u, cmd = %d",
+			pipe_err(p, "pipeline_trigger_run(): ret = %d, host->comp.id = %u, cmd = %d",
 				 ret, dev_comp_id(host), cmd);
+		else if (ret == PPL_STATUS_PATH_STOP)
+			ret = 0;
 
 		if (pipeline_is_timer_driven(p))
 			return ret;
@@ -431,7 +446,7 @@ static int pipeline_comp_timestamp(struct comp_dev *current,
 	    (dev_comp_type(current) == SOF_COMP_DAI ||
 	    dev_comp_type(current) == SOF_COMP_SG_DAI)) {
 		platform_dai_timestamp(current, ppl_data->posn);
-		return -1;
+		return PPL_STATUS_PATH_STOP;
 	}
 
 	return pipeline_for_each_comp(current, ctx, dir);
@@ -453,7 +468,9 @@ void pipeline_get_timestamp(struct pipeline *p, struct comp_dev *host,
 	data.start = host;
 	data.posn = posn;
 
-	walk_ctx.comp_func(host, NULL, &walk_ctx, host->direction);
+	if (walk_ctx.comp_func(host, NULL, &walk_ctx, host->direction) !=
+	    PPL_STATUS_PATH_STOP)
+		pipe_warn(p, "pipeline_get_timestamp(): DAI position update failed");
 
 	/* set timestamp resolution */
 	posn->timestamp_ns = p->period * 1000;

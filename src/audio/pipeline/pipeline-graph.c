@@ -127,7 +127,7 @@ struct pipeline *pipeline_new(uint32_t pipeline_id, uint32_t priority, uint32_t 
 	p->priority = priority;
 	p->pipeline_id = pipeline_id;
 	p->status = COMP_STATE_INIT;
-	p->trigger.cmd = -EINVAL;
+	p->trigger.cmd = COMP_TRIGGER_NO_ACTION;
 	ret = memcpy_s(&p->tctx, sizeof(struct tr_ctx), &pipe_tr,
 		       sizeof(struct tr_ctx));
 	assert(!ret);
@@ -236,9 +236,7 @@ static int pipeline_comp_complete(struct comp_dev *current,
 	current->period = ppl_data->p->period;
 	current->priority = ppl_data->p->priority;
 
-	pipeline_for_each_comp(current, ctx, dir);
-
-	return 0;
+	return pipeline_for_each_comp(current, ctx, dir);
 }
 
 int pipeline_complete(struct pipeline *p, struct comp_dev *source,
@@ -255,6 +253,7 @@ int pipeline_complete(struct pipeline *p, struct comp_dev *source,
 #else
 	int freq = 0;
 #endif
+	int ret;
 
 	pipe_info(p, "pipeline complete, clock freq %dHz", freq);
 
@@ -270,7 +269,7 @@ int pipeline_complete(struct pipeline *p, struct comp_dev *source,
 	/* now walk downstream from source component and
 	 * complete component task and pipeline initialization
 	 */
-	walk_ctx.comp_func(source, NULL, &walk_ctx, PPL_DIR_DOWNSTREAM);
+	ret = walk_ctx.comp_func(source, NULL, &walk_ctx, PPL_DIR_DOWNSTREAM);
 
 	p->source_comp = source;
 	p->sink_comp = sink;
@@ -279,7 +278,7 @@ int pipeline_complete(struct pipeline *p, struct comp_dev *source,
 	/* show heap status */
 	heap_trace_all(0);
 
-	return 0;
+	return ret;
 }
 
 static int pipeline_comp_reset(struct comp_dev *current,
@@ -360,7 +359,6 @@ int pipeline_for_each_comp(struct comp_dev *current,
 	struct list_item *clist;
 	struct comp_buffer *buffer;
 	struct comp_dev *buffer_comp;
-	uint32_t flags;
 
 	/* run this operation further */
 	list_for_item(clist, buffer_list) {
@@ -383,16 +381,16 @@ int pipeline_for_each_comp(struct comp_dev *current,
 
 		/* continue further */
 		if (ctx->comp_func) {
-			buffer_lock(buffer, &flags);
+			buffer = buffer_acquire_irq(buffer);
 			buffer->walking = true;
-			buffer_unlock(buffer, flags);
+			buffer = buffer_release_irq(buffer);
 
 			int err = ctx->comp_func(buffer_comp, buffer,
 						 ctx, dir);
-			buffer_lock(buffer, &flags);
+			buffer = buffer_acquire_irq(buffer);
 			buffer->walking = false;
-			buffer_unlock(buffer, flags);
-			if (err < 0)
+			buffer = buffer_release_irq(buffer);
+			if (err < 0 || err == PPL_STATUS_PATH_STOP)
 				return err;
 		}
 	}

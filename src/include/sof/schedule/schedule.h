@@ -10,7 +10,6 @@
 #define __SOF_SCHEDULE_SCHEDULE_H__
 
 #include <sof/common.h>
-#include <sof/lib/cpu.h>
 #include <sof/list.h>
 #include <sof/schedule/task.h>
 #include <sof/trace/trace.h>
@@ -34,6 +33,11 @@ enum {
 				  */
 	SOF_SCHEDULE_COUNT	/**< indicates number of scheduler types */
 };
+
+/** \brief Scheduler free available flags */
+#define SOF_SCHEDULER_FREE_IRQ_ONLY	BIT(0) /**< Free function disables only
+						 *  interrupts
+						 */
 
 /**
  * Scheduler operations.
@@ -112,18 +116,27 @@ struct scheduler_ops {
 	/**
 	 * Frees scheduler's resources.
 	 * @param data Private data of selected scheduler.
+	 * @param flags Function specific flags.
 	 * @return 0 if succeeded, error code otherwise.
 	 *
 	 * This operation is optional.
 	 */
-	void (*scheduler_free)(void *data);
+	void (*scheduler_free)(void *data, uint32_t flags);
+
+	/**
+	 * Restores scheduler's resources.
+	 * @param data Private data of selected scheduler.
+	 * @return 0 if succeeded, error code otherwise.
+	 *
+	 * This operation is optional.
+	 */
+	int (*scheduler_restore)(void *data);
 };
 
 /** \brief Holds information about scheduler. */
 struct schedule_data {
 	struct list_item list;			/**< list of schedulers */
 	int type;				/**< SOF_SCHEDULE_ type */
-	uint32_t core;				/**< the index of the core the scheduler run on */
 	const struct scheduler_ops *ops;	/**< scheduler operations */
 	void *data;				/**< pointer to private data */
 };
@@ -212,8 +225,7 @@ static inline int schedule_task(struct task *task, uint64_t start,
 
 	list_for_item(slist, &schedulers->list) {
 		sch = container_of(slist, struct schedule_data, list);
-		if (task->type == sch->type && sch->core == cpu_get_id() &&
-		    sch->ops->schedule_task)
+		if (task->type == sch->type && sch->ops->schedule_task)
 			return sch->ops->schedule_task(sch->data, task, start,
 						       period);
 	}
@@ -252,8 +264,7 @@ static inline int schedule_task_cancel(struct task *task)
 
 	list_for_item(slist, &schedulers->list) {
 		sch = container_of(slist, struct schedule_data, list);
-		if (task->type == sch->type && sch->core == cpu_get_id() &&
-		    sch->ops->schedule_task_cancel)
+		if (task->type == sch->type && sch->ops->schedule_task_cancel)
 			return sch->ops->schedule_task_cancel(sch->data, task);
 	}
 
@@ -277,7 +288,7 @@ static inline int schedule_task_free(struct task *task)
 }
 
 /** See scheduler_ops::scheduler_free */
-static inline void schedule_free(void)
+static inline void schedule_free(uint32_t flags)
 {
 	struct schedulers *schedulers = *arch_schedulers_get();
 	struct schedule_data *sch;
@@ -286,8 +297,26 @@ static inline void schedule_free(void)
 	list_for_item(slist, &schedulers->list) {
 		sch = container_of(slist, struct schedule_data, list);
 		if (sch->ops->scheduler_free)
-			sch->ops->scheduler_free(sch->data);
+			sch->ops->scheduler_free(sch->data, flags);
 	}
+}
+
+/** See scheduler_ops::scheduler_restore */
+static inline int schedulers_restore(void)
+{
+	struct schedulers *schedulers = *arch_schedulers_get();
+	struct schedule_data *sch;
+	struct list_item *slist;
+
+	assert(schedulers);
+
+	list_for_item(slist, &schedulers->list) {
+		sch = container_of(slist, struct schedule_data, list);
+		if (sch->ops->scheduler_restore)
+			return sch->ops->scheduler_restore(sch->data);
+	}
+
+	return 0;
 }
 
 /**

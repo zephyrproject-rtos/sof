@@ -110,10 +110,11 @@ static void schedule_ll_task_done(struct ll_schedule_data *sch,
 	/* Remove from the task list, schedule_task_cancel() won't handle it again */
 	list_item_del(&task->list);
 
+	/* unregister the task */
 	domain_unregister(sch->domain, task, atomic_sub(&sch->num_tasks, 1) - 1);
 
 	tr_info(&ll_tr, "task complete %p %pU", task, task->uid);
-	tr_info(&ll_tr, "num_tasks %d total_num_tasks %d",
+	tr_info(&ll_tr, "num_tasks %ld total_num_tasks %ld",
 		atomic_read(&sch->num_tasks),
 		atomic_read(&sch->domain->total_num_tasks));
 }
@@ -122,21 +123,35 @@ static void schedule_ll_tasks_execute(struct ll_schedule_data *sch)
 {
 	struct ll_schedule_domain *domain = sch->domain;
 	struct list_item *wlist;
-	struct list_item *tlist;
 	struct task *task;
 
 	/* check each task in the list for pending */
-	list_for_item_safe(wlist, tlist, &sch->tasks) {
-		task = container_of(wlist, struct task, list);
+	wlist = sch->tasks.next;
 
-		if (task->state != SOF_TASK_STATE_PENDING)
+	/*
+	 * Cannot use list_for_item(_safe)() because the task can cancel some
+	 * other tasks, removing them from the list. This happens, e.g. when
+	 * a pipeline task terminates a DMIC task.
+	 */
+	while (wlist != &sch->tasks) {
+		task = list_item(wlist, struct task, list);
+
+		if (task->state != SOF_TASK_STATE_PENDING) {
+			wlist = task->list.next;
 			continue;
+		}
 
 		tr_dbg(&ll_tr, "task %p %pU being started...", task, task->uid);
 
 		task->state = SOF_TASK_STATE_RUNNING;
 
+		/*
+		 * The running task might cancel other tasks, which then get
+		 * removed from the list
+		 */
 		task->state = task_run(task);
+
+		wlist = task->list.next;
 
 		spin_lock(&domain->lock);
 
@@ -238,7 +253,8 @@ static void schedule_ll_tasks_run(void *data)
 	}
 
 	/* tasks on current core finished, re-enable domain on it */
-	domain_enable(domain, core);
+	if (atomic_read(&sch->num_tasks))
+		domain_enable(domain, core);
 
 	spin_unlock(&domain->lock);
 
@@ -304,7 +320,7 @@ static int schedule_ll_domain_set(struct ll_schedule_data *sch,
 	tr_info(&ll_tr, "new added task->start %u at %u",
 		(unsigned int)task->start,
 		(unsigned int)platform_timer_get_atomic(timer_get()));
-	tr_info(&ll_tr, "num_tasks %d total_num_tasks %d",
+	tr_info(&ll_tr, "num_tasks %ld total_num_tasks %ld",
 		atomic_read(&sch->num_tasks),
 		atomic_read(&domain->total_num_tasks));
 
@@ -329,9 +345,9 @@ static void schedule_ll_domain_clear(struct ll_schedule_data *sch,
 		domain_disable(domain, cpu_get_id());
 
 	/* unregister the task */
-	domain_unregister(domain, task, (uint32_t)atomic_read(&sch->num_tasks));
+	domain_unregister(domain, task, atomic_read(&sch->num_tasks));
 
-	tr_info(&ll_tr, "num_tasks %d total_num_tasks %d",
+	tr_info(&ll_tr, "num_tasks %ld total_num_tasks %ld",
 		atomic_read(&sch->num_tasks),
 		atomic_read(&domain->total_num_tasks));
 
@@ -570,17 +586,22 @@ out:
 	return 0;
 }
 
-static void scheduler_free_ll(void *data)
+static void scheduler_free_ll(void *data, uint32_t flags)
 {
 	struct ll_schedule_data *sch = data;
-	uint32_t flags;
+	uint32_t irq_flags;
 
-	irq_local_disable(flags);
+	if (flags & SOF_SCHEDULER_FREE_IRQ_ONLY)
+		return;
+
+	irq_local_disable(irq_flags);
+
+	domain_unregister(sch->domain, NULL, 0);
 
 	notifier_unregister(sch, NULL,
 			    NOTIFIER_CLK_CHANGE_ID(sch->domain->clk));
 
-	irq_local_enable(flags);
+	irq_local_enable(irq_flags);
 }
 
 static void ll_scheduler_recalculate_tasks(struct ll_schedule_data *sch,
@@ -646,6 +667,7 @@ static const struct scheduler_ops schedule_ll_ops = {
 	.schedule_task_cancel	= schedule_ll_task_cancel,
 	.reschedule_task	= reschedule_ll_task,
 	.scheduler_free		= scheduler_free_ll,
+	.scheduler_restore	= NULL,
 	.schedule_task_running	= NULL,
 	.schedule_task_complete	= NULL,
 };

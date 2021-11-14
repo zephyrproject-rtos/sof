@@ -219,6 +219,7 @@ static void dai_free(struct comp_dev *dev)
 	if (dd->chan) {
 		notifier_unregister(dev, dd->chan, NOTIFIER_ID_DMA_COPY);
 		dma_channel_put(dd->chan);
+		dd->chan->dev_data = NULL;
 	}
 
 	dma_put(dd->dma);
@@ -599,6 +600,8 @@ static int dai_config_prepare(struct comp_dev *dev)
 		return -EIO;
 	}
 
+	dd->chan->dev_data = dd;
+
 	comp_info(dev, "dai_config_prepare(): new configured dma channel index %d",
 		  dd->chan->index);
 
@@ -607,27 +610,6 @@ static int dai_config_prepare(struct comp_dev *dev)
 			  dai_dma_cb, 0);
 
 	return 0;
-}
-
-static void dai_config_reset(struct comp_dev *dev)
-{
-	struct dai_data *dd = comp_get_drvdata(dev);
-
-	/* cannot configure DAI while active */
-	if (dev->state == COMP_STATE_ACTIVE) {
-		comp_info(dev, "dai_config(): Component is in active state. Ignore resetting");
-		return;
-	}
-
-	/* put the allocated DMA channel first */
-	if (dd->chan) {
-		dma_channel_put(dd->chan);
-		dd->chan = NULL;
-
-		/* remove callback */
-		notifier_unregister(dev, dd->chan,
-				    NOTIFIER_ID_DMA_COPY);
-	}
 }
 
 static int dai_prepare(struct comp_dev *dev)
@@ -686,7 +668,12 @@ static int dai_reset(struct comp_dev *dev)
 
 	comp_info(dev, "dai_reset()");
 
-	dai_config_reset(dev);
+	/*
+	 * DMA channel release should be skipped now for DAI's that support the two-step stop option.
+	 * It will be done when the host sends the DAI_CONFIG IPC during hw_free.
+	 */
+	if (!dd->delayed_dma_stop)
+		dai_dma_release(dev);
 
 	dma_sg_free(&config->elem_array);
 
@@ -911,7 +898,6 @@ static int dai_copy(struct comp_dev *dev)
 	uint32_t sink_samples;
 	uint32_t samples;
 	int ret = 0;
-	uint32_t flags = 0;
 
 	comp_dbg(dev, "dai_copy()");
 
@@ -922,7 +908,7 @@ static int dai_copy(struct comp_dev *dev)
 		return ret;
 	}
 
-	buffer_lock(buf, &flags);
+	buf = buffer_acquire_irq(buf);
 
 	/* calculate minimum size to copy */
 	if (dev->direction == SOF_IPC_STREAM_PLAYBACK) {
@@ -942,7 +928,7 @@ static int dai_copy(struct comp_dev *dev)
 
 	copy_bytes = samples * sampling;
 
-	buffer_unlock(buf, flags);
+	buffer_release_irq(buf);
 
 	comp_dbg(dev, "dai_copy(), dir: %d copy_bytes= 0x%x, frames= %d",
 		 dev->direction, copy_bytes,

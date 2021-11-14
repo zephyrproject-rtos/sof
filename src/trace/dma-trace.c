@@ -278,9 +278,34 @@ static int dma_trace_start(struct dma_trace_data *d)
 		return -ENODEV;
 	}
 
-	err = dma_copy_set_stream_tag(&d->dc, d->stream_tag);
+	if (d->dc.chan) {
+		/* We already have DMA channel for dtrace, stop it */
+		mtrace_printf(LOG_LEVEL_WARNING,
+			      "dma_trace_start(): DMA reconfiguration (active stream_tag: %u)",
+			      d->active_stream_tag);
+
+		err = dma_stop(d->dc.chan);
+		if (err < 0) {
+			mtrace_printf(LOG_LEVEL_ERROR,
+				      "dma_trace_start(): DMA channel failed to stop");
+		} else if (d->active_stream_tag != d->stream_tag) {
+			/* Re-request a channel if different tag is provided */
+			mtrace_printf(LOG_LEVEL_WARNING,
+				      "dma_trace_start(): stream_tag change from %u to %u",
+				      d->active_stream_tag, d->stream_tag);
+
+			dma_channel_put(d->dc.chan);
+			d->dc.chan = NULL;
+			err = dma_copy_set_stream_tag(&d->dc, d->stream_tag);
+		}
+	} else {
+		err = dma_copy_set_stream_tag(&d->dc, d->stream_tag);
+	}
+
 	if (err < 0)
 		return err;
+
+	d->active_stream_tag = d->stream_tag;
 
 	/* size of every trace record */
 	elem_size = sizeof(uint64_t) * 2;
@@ -300,15 +325,24 @@ static int dma_trace_start(struct dma_trace_data *d)
 			   config.direction,
 			   elem_num, elem_size, elem_addr, 0);
 	if (err < 0)
-		return err;
+		goto err_alloc;
 
 	err = dma_set_config(d->dc.chan, &config);
 	if (err < 0) {
 		mtrace_printf(LOG_LEVEL_ERROR, "dma_set_config() failed: %d", err);
-		return err;
+		goto err_config;
 	}
 
 	err = dma_start(d->dc.chan);
+	if (err == 0)
+		return 0;
+
+err_config:
+	dma_sg_free(&config.elem_array);
+
+err_alloc:
+	dma_channel_put(d->dc.chan);
+	d->dc.chan = NULL;
 
 	return err;
 }
@@ -418,6 +452,21 @@ out:
 		dma_trace_buffer_free(d);
 
 	return err;
+}
+
+void dma_trace_disable(struct dma_trace_data *d)
+{
+	/* cancel trace work */
+	schedule_task_cancel(&d->dmat_work);
+
+	if (d->dc.chan) {
+		dma_stop(d->dc.chan);
+		dma_channel_put(d->dc.chan);
+		d->dc.chan = NULL;
+	}
+
+	/* free trace buffer */
+	dma_trace_buffer_free(d);
 }
 
 /** Sends all pending DMA messages to mailbox (for emergencies) */

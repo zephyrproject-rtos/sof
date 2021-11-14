@@ -23,7 +23,7 @@ static int nhlt_dmic_dai_params_get(struct dai *dai, uint32_t *outcontrol,
 				    struct nhlt_pdm_ctrl_fir_cfg **fir_cfg)
 {
 	struct dmic_pdata *dmic = dai_get_drvdata(dai);
-	int fir_stereo = FIR_CONTROL_A_STEREO_GET(fir_cfg[0]->fir_control);
+	int fir_stereo[2];
 	int mic_swap;
 
 	switch (OUTCONTROL0_OF_GET(outcontrol[dai->index])) {
@@ -41,7 +41,11 @@ static int nhlt_dmic_dai_params_get(struct dai *dai, uint32_t *outcontrol,
 
 	switch (OUTCONTROL0_IPM_GET(outcontrol[dai->index])) {
 	case 0:
-		if (fir_stereo) {
+		if (!fir_cfg[0])
+			return -EINVAL;
+
+		fir_stereo[0] = FIR_CONTROL_A_STEREO_GET(fir_cfg[0]->fir_control);
+		if (fir_stereo[0]) {
 			dmic->dai_channels = 2;
 			dmic->enable[0] = 0x3; /* PDM0 MIC A and B */
 			dmic->enable[1] = 0x0;	/* PDM1 none */
@@ -54,7 +58,11 @@ static int nhlt_dmic_dai_params_get(struct dai *dai, uint32_t *outcontrol,
 		}
 		break;
 	case 1:
-		if (fir_stereo) {
+		if (!fir_cfg[1])
+			return -EINVAL;
+
+		fir_stereo[1] = FIR_CONTROL_A_STEREO_GET(fir_cfg[1]->fir_control);
+		if (fir_stereo[1]) {
 			dmic->dai_channels = 2;
 			dmic->enable[0] = 0x0; /* PDM0 none */
 			dmic->enable[1] = 0x3;	/* PDM1 MIC A and B */
@@ -67,7 +75,12 @@ static int nhlt_dmic_dai_params_get(struct dai *dai, uint32_t *outcontrol,
 		}
 		break;
 	case 2:
-		if (fir_stereo) {
+		if (!fir_cfg[0] || !fir_cfg[0])
+			return -EINVAL;
+
+		fir_stereo[0] = FIR_CONTROL_A_STEREO_GET(fir_cfg[0]->fir_control);
+		fir_stereo[1] = FIR_CONTROL_A_STEREO_GET(fir_cfg[1]->fir_control);
+		if (fir_stereo[0] == fir_stereo[1]) {
 			dmic->dai_channels = 4;
 			dmic->enable[0] = 0x3; /* PDM0 MIC A and B */
 			dmic->enable[1] = 0x3;	/* PDM1 MIC A and B */
@@ -185,11 +198,11 @@ int dmic_set_config_nhlt(struct dai *dai, void *spec_config)
 	struct nhlt_pdm_ctrl_fir_cfg *fir_cfg_b[DMIC_HW_CONTROLLERS_MAX];
 	struct nhlt_pdm_fir_coeffs *fir_a[DMIC_HW_CONTROLLERS_MAX] = {NULL};
 	struct nhlt_pdm_fir_coeffs *fir_b[DMIC_HW_CONTROLLERS_MAX];
-	uint32_t out_control[DMIC_HW_FIFOS_MAX];
+	uint32_t out_control[DMIC_HW_FIFOS_MAX] = {0};
 	uint32_t channel_ctrl_mask;
 	uint32_t fir_control;
 	uint32_t pdm_ctrl_mask;
-	uint32_t ref;
+	uint32_t ref = 0;
 	uint32_t val;
 	const uint8_t *p = spec_config;
 	int num_fifos;
@@ -206,11 +219,17 @@ int dmic_set_config_nhlt(struct dai *dai, void *spec_config)
 #if defined DMIC_IPM_VER2
 	int bf9, bf10, bf11, bf12;
 #endif
+	int bfth;
 	int ret;
 	int p_mcic = 0;
 	int p_mfira = 0;
 	int p_mfirb = 0;
 	int p_clkdiv = 0;
+
+	if (dai->index >= DMIC_HW_FIFOS_MAX) {
+		dai_err(dai, "dmic_set_config_nhlt(): illegal DAI index %d", dai->index);
+		return -EINVAL;
+	}
 
 	/* Skip not used headers */
 	p += sizeof(struct nhlt_dmic_gateway_attributes);
@@ -229,7 +248,10 @@ int dmic_set_config_nhlt(struct dai *dai, void *spec_config)
 		return -EINVAL;
 	}
 
-	for (n = 0; n < num_fifos; n++) {
+	for (n = 0; n < DMIC_HW_FIFOS_MAX; n++) {
+		if (!(channel_ctrl_mask & (1 << n)))
+			continue;
+
 		val = *(uint32_t *)p;
 		out_control[n] = val;
 		bf1 = OUTCONTROL0_TIE_GET(val);
@@ -240,9 +262,14 @@ int dmic_set_config_nhlt(struct dai *dai, void *spec_config)
 		bf6 = OUTCONTROL0_OF_GET(val);
 		bf7 = OUTCONTROL0_IPM_GET(val);
 		bf8 = OUTCONTROL0_TH_GET(val);
-		dai_dbg(dai, "dmic_set_config_nhlt(): OUTCONTROL%d = %08x", n, out_control[n]);
-		dai_dbg(dai, "  tie=%d, sip=%d, finit=%d, fci=%d", bf1, bf2, bf3, bf4);
-		dai_dbg(dai, "  bfth=%d, of=%d, ipm=%d, th=%d", bf5, bf6, bf7, bf8);
+		dai_info(dai, "dmic_set_config_nhlt(): OUTCONTROL%d = %08x", n, out_control[n]);
+		dai_info(dai, "  tie=%d, sip=%d, finit=%d, fci=%d", bf1, bf2, bf3, bf4);
+		dai_info(dai, "  bfth=%d, of=%d, ipm=%d, th=%d", bf5, bf6, bf7, bf8);
+		if (bf5 > OUTCONTROL0_BFTH_MAX) {
+			dai_err(dai, "dmic_set_config_nhlt(): illegal BFTH value");
+			return -EINVAL;
+		}
+
 #if defined DMIC_IPM_VER1
 		ref = OUTCONTROL0_TIE(bf1) | OUTCONTROL0_SIP(bf2) | OUTCONTROL0_FINIT(bf3) |
 			OUTCONTROL0_FCI(bf4) | OUTCONTROL0_BFTH(bf5) | OUTCONTROL0_OF(bf6) |
@@ -252,8 +279,7 @@ int dmic_set_config_nhlt(struct dai *dai, void *spec_config)
 		bf10 = OUTCONTROL0_IPM_SOURCE_2_GET(val);
 		bf11 = OUTCONTROL0_IPM_SOURCE_3_GET(val);
 		bf12 = OUTCONTROL0_IPM_SOURCE_4_GET(val);
-		dai_dbg(dai, "  ipms1=%d, ipms2=%d, ipms3=%d, ipms4=%d",
-			bf9, bf10, bf11, bf12);
+		dai_info(dai, "  ipms1=%d, ipms2=%d, ipms3=%d, ipms4=%d", bf9, bf10, bf11, bf12);
 		ref = OUTCONTROL0_TIE(bf1) | OUTCONTROL0_SIP(bf2) | OUTCONTROL0_FINIT(bf3) |
 			OUTCONTROL0_FCI(bf4) | OUTCONTROL0_BFTH(bf5) | OUTCONTROL0_OF(bf6) |
 			OUTCONTROL0_IPM(bf7) | OUTCONTROL0_IPM_SOURCE_1(bf9) |
@@ -272,21 +298,22 @@ int dmic_set_config_nhlt(struct dai *dai, void *spec_config)
 	/* Write the FIFO control registers. The clear/set of bits is the same for
 	 * all DMIC_HW_VERSION
 	 */
-	if (dai->index == 0) {
-		/* Clear TIE, SIP, FCI, set FINIT, the rest of bits as such */
-		val = (out_control[0] &
-			~(OUTCONTROL0_TIE_BIT | OUTCONTROL0_SIP_BIT | OUTCONTROL0_FCI_BIT)) |
-			OUTCONTROL0_FINIT_BIT;
+	/* Clear TIE, SIP, FCI, set FINIT, the rest of bits as such */
+	val = (out_control[dai->index] &
+		~(OUTCONTROL0_TIE_BIT | OUTCONTROL0_SIP_BIT | OUTCONTROL0_FCI_BIT)) |
+		OUTCONTROL0_FINIT_BIT;
+	if (dai->index == 0)
 		dai_write(dai, OUTCONTROL0, val);
-		dai_dbg(dai, "dmic_set_config_nhlt(): OUTCONTROL0 = %08x", val);
-	} else {
-		/* Clear TIE, SIP, FCI, set FINIT, the rest of bits as such */
-		val = (out_control[1] &
-			~(OUTCONTROL1_TIE_BIT | OUTCONTROL1_SIP_BIT | OUTCONTROL1_FCI_BIT)) |
-			OUTCONTROL1_FINIT_BIT;
+	else
 		dai_write(dai, OUTCONTROL1, val);
-		dai_dbg(dai, "dmic_set_config_nhlt(): OUTCONTROL1 = %08x", val);
-	}
+
+	dai_info(dai, "dmic_set_config_nhlt(): OUTCONTROL%d = %08x", dai->index, val);
+
+	/* Pass 2^BFTH to plat_data fifo depth. It will be used later in DMA
+	 * configuration
+	 */
+	bfth = OUTCONTROL0_BFTH_GET(val);
+	dai->plat_data.fifo->depth = 1 << bfth;
 
 	/* Get PDMx registers */
 	pdm_ctrl_mask = ((struct nhlt_pdm_ctrl_mask *)p)->pdm_ctrl_mask;
@@ -298,7 +325,12 @@ int dmic_set_config_nhlt(struct dai *dai, void *spec_config)
 		return -EINVAL;
 	}
 
-	for (n = 0; n < num_pdm; n++) {
+	for (n = 0; n < DMIC_HW_CONTROLLERS; n++) {
+		fir_cfg_a[n] = NULL;
+		fir_cfg_b[n] = NULL;
+		if (!(pdm_ctrl_mask & (1 << n)))
+			continue;
+
 		dai_dbg(dai, "dmic_set_config_nhlt(): PDM%d", n);
 
 		/* Get CIC configuration */
@@ -310,7 +342,7 @@ int dmic_set_config_nhlt(struct dai *dai, void *spec_config)
 		clk_div = MIC_CONTROL_PDM_CLKDIV_GET(pdm_cfg[n]->mic_control);
 		p_clkdiv = clk_div + 2;
 		if (dmic->global->active_fifos_mask == 0) {
-			val = pdm_cfg[0]->cic_control;
+			val = pdm_cfg[n]->cic_control;
 			bf1 = CIC_CONTROL_SOFT_RESET_GET(val);
 			bf2 = CIC_CONTROL_CIC_START_B_GET(val);
 			bf3 = CIC_CONTROL_CIC_START_A_GET(val);

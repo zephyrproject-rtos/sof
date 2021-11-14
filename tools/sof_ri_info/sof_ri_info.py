@@ -12,10 +12,16 @@
 # pylint: disable=too-few-public-methods
 # pylint: disable=too-many-arguments
 # pylint: disable=too-many-instance-attributes
+# pylint: disable=invalid-name
+# pylint: disable=missing-function-docstring
 
 import sys
 import argparse
 import struct
+import io
+import pathlib
+import hashlib
+
 
 # To extend the DSP memory layout list scroll down to DSP_MEM_SPACE_EXT
 
@@ -330,6 +336,9 @@ def parse_params():
                         action='store_true')
     parser.add_argument('--no_memory', help='skip information about memory',
                         action='store_true')
+    parser.add_argument('--erase_vars', help='''
+    Replace the variable signature and any other variable element with constants
+    ''', type=pathlib.Path, dest='erased_vars_image')
     parser.add_argument('sof_ri_path', help='path to fw binary file to parse')
     parsed_args = parser.parse_args()
 
@@ -487,7 +496,8 @@ def parse_cse_manifest(reader):
     # Try to detect signature first
     sig = reader.read_string(4)
     if sig != '$CPD':
-        reader.error('CSE Manifest NOT found ' + sig + ')', -4)
+        reader.error('CSE Manifest magic number NOT found, instead: ('
+                     + sig + ')', -4)
         sys.exit(1)
     reader.info('CSE Manifest (' + sig + ')', -4)
 
@@ -511,7 +521,7 @@ def parse_cse_manifest(reader):
     # Read entries
     nb_index = 0
     while nb_index < nb_entries:
-        reader.info('Looking for CSE Manifest entry')
+        reader.info('Reading CSE Manifest entry %d...' % nb_index)
         entry_name = reader.read_string(12)
         entry_offset = reader.read_dw()
         entry_length = reader.read_dw()
@@ -524,24 +534,25 @@ def parse_cse_manifest(reader):
         hdr_entry.add_a(Ahex('entry_length', entry_length))
         hdr.add_comp(hdr_entry)
 
-        reader.info('CSE Entry name {} length {}'.format(entry_name,
-                    entry_length))
+        assert cse_mft.file_offset == reader.ext_mft_length
+        entry_file_offset = reader.ext_mft_length + entry_offset
+        reader.info('... CSE Entry name {} file offset 0x{:x} length {}'.format(entry_name,
+                    entry_file_offset, entry_length))
 
         if '.man' in entry_name:
-            entry = CssManifest(entry_name,
-                                reader.ext_mft_length + entry_offset)
-            cur_off = reader.set_offset(reader.ext_mft_length + entry_offset)
+            entry = CssManifest(entry_name, entry_file_offset)
+            cur_off = reader.set_offset(entry_file_offset)
             parse_css_manifest(entry, reader,
-                               reader.ext_mft_length + entry_offset + entry_length)
+                               entry_file_offset + entry_length)
             reader.set_offset(cur_off)
         elif '.met' in entry_name:
-            cur_off = reader.set_offset(reader.ext_mft_length + entry_offset)
+            cur_off = reader.set_offset(entry_file_offset)
             entry = parse_mft_extension(reader, 0)
             entry.name = '{} ({})'.format(entry_name, entry.name)
             reader.set_offset(cur_off)
         else:
             # indicate the place, the entry is enumerated. mft parsed later
-            entry = Component('adsp_mft_cse_entry', entry_name, entry_offset)
+            entry = Component('adsp_mft_cse_entry', entry_name, entry_file_offset)
         cse_mft.add_comp(entry)
 
         nb_index += 1
@@ -575,7 +586,10 @@ def parse_css_manifest_4(css_mft, reader, size_limit):
     hdr.add_a(Auint('header_version', reader.read_dw()))
     hdr.add_a(Auint('reserved0', reader.read_dw(), 'red'))
     hdr.add_a(Ahex('mod_vendor', reader.read_dw()))
+    date_start = reader.get_offset()
+    hdr.add_a(Auint('date_start', date_start))
     hdr.add_a(Adate('date', hex(reader.read_dw())))
+    hdr.add_a(Auint('date_length', reader.get_offset() - date_start))
     size = reader.read_dw()
     hdr.add_a(Auint('size', size))
     hdr.add_a(Astring('header_id', reader.read_string(4)))
@@ -591,7 +605,11 @@ def parse_css_manifest_4(css_mft, reader, size_limit):
     modulus = reader.read_bytes(modulus_size * 4)
     hdr.add_a(Amodulus('modulus', modulus, KNOWN_KEYS.get(modulus, 'Other')))
     hdr.add_a(Abytes('exponent', reader.read_bytes(exponent_size * 4)))
+
+    sig_start = reader.get_offset()
+    hdr.add_a(Auint('signature_start', sig_start))
     hdr.add_a(Abytes('signature', reader.read_bytes(modulus_size * 4)))
+    hdr.add_a(Auint('signature_length', reader.get_offset() - sig_start))
 
     # Move right after the header
     reader.set_offset(css_mft.file_offset + header_len_dw*4)
@@ -603,26 +621,30 @@ def parse_css_manifest_4(css_mft, reader, size_limit):
     #   that could be parsed if extension type is recognized
     #
     #   or series of 0xffffffff that should be skipped
-    reader.info('Parsing CSS Manifest extensions end 0x{:x}'.format(size_limit))
+    reader.info('Parsing CSS Manifest extensions, end at 0x{:x}'.format(size_limit))
     ext_idx = 0
     while reader.get_offset() < size_limit:
         ext_type = reader.read_dw()
-        reader.info('Reading extension type 0x{:x}'.format(ext_type))
+        reader.info('Reading CSS extension type 0x{:x}:'.format(ext_type))
         if ext_type == 0xffffffff:
             continue
         reader.set_offset(reader.get_offset() - 4)
         css_mft.add_comp(parse_mft_extension(reader, ext_idx))
         ext_idx += 1
 
+    assert reader.get_offset() == size_limit # wrong extension length
+
+    css_mft.length = reader.get_offset() - css_mft.file_offset
     return css_mft
 
 def parse_mft_extension(reader, ext_id):
     """ Parses mft extension from sof binary
     """
+    begin_off = reader.get_offset()
     ext_type = reader.read_dw()
     ext_len = reader.read_dw()
     if ext_type == 15:
-        begin_off = reader.get_offset()
+        reader.info("Plat Fw Auth extension")
         ext = PlatFwAuthExtension(ext_id, reader.get_offset()-8)
         ext.add_a(Astring('name', reader.read_string(4)))
         ext.add_a(Auint('vcn', reader.read_dw()))
@@ -631,6 +653,7 @@ def parse_mft_extension(reader, ext_id):
         read_len = reader.get_offset() - begin_off
         reader.ff_data(ext_len - read_len)
     elif ext_type == 17:
+        reader.info("ADSP metadata file extension")
         ext = AdspMetadataFileExt(ext_id, reader.get_offset()-8)
         ext.add_a(Auint('adsp_imr_type', reader.read_dw(), 'red'))
         # skip reserved part
@@ -644,10 +667,12 @@ def parse_mft_extension(reader, ext_id):
         ext.add_a(Auint('limit_offset', reader.read_dw()))
         ext.add_a(Abytes('attributes', reader.read_bytes(16)))
     else:
+        reader.info("Other extension")
         ext = MftExtension(ext_id, 'Other Extension', reader.get_offset()-8)
         reader.ff_data(ext_len-8)
     ext.add_a(Auint('type', ext_type))
     ext.add_a(Auint('length', ext_len))
+    reader.info("... end of extension")
     return ext
 
 def parse_adsp_manifest_hdr(reader):
@@ -856,7 +881,8 @@ class BinReader():
     def error(self, logerror, off_delta=0):
         """ Prints 'error' log to the output
         """
-        print(self.offset_to_string(off_delta) + '\terror: ' + logerror)
+        print(self.offset_to_string(off_delta) + '\terror: ' + logerror,
+              file=sys.stderr)
 
 # Data Model
 
@@ -1105,6 +1131,9 @@ class CssManifest(Component):
         hdr = self.cdir['css_mft_hdr']
         out = '{}{} (CSS Manifest)'.format(pref, self.name)
         out += ' type {}'.format(hdr.adir['type'])
+        out += ' file offset {:#x} hdr_len {}'.format(
+            self.file_offset, hdr.adir['header_len_dw'].val * 4
+        )
         out += ' ver {}'.format(hdr.adir['header_version'])
         out += ' date {}'.format(hdr.adir['date'])
         print(out)
@@ -1117,7 +1146,8 @@ class CssManifest(Component):
               format(pref,
                      hdr.adir['exponent_size']))
         print('{}    {}'.format(pref, hdr.adir['exponent']))
-        print('{}  Signature'.format(pref))
+        print('{}  Signature (file offset {}, length {})'.format(
+            pref, hdr.adir['signature_start'], hdr.adir['signature_length']))
         print('{}    {}'.format(pref, hdr.adir['signature']))
         # super().dump_info(pref)
         self.dump_comp_info(pref, comp_filter + ['Header'])
@@ -1130,9 +1160,9 @@ class MftExtension(Component):
                                            offset)
 
     def dump_info(self, pref, comp_filter):
-        print('{}{} type {} length {}'.
+        print('{}{} type {} file offset 0x{:x} length {}'.
               format(pref, self.name,
-                     self.adir['type'], self.adir['length']))
+                     self.adir['type'], self.file_offset, self.adir['length']))
 
 class PlatFwAuthExtension(MftExtension):
     """ Platform FW Auth Extension
@@ -1142,7 +1172,8 @@ class PlatFwAuthExtension(MftExtension):
               self).__init__(ext_id, 'Plat Fw Auth Extension', offset)
 
     def dump_info(self, pref, comp_filter):
-        out = '{}{}'.format(pref, self.name)
+        super().dump_info(pref, comp_filter)
+        out = '{}'.format(pref)
         out += ' name {}'.format(self.adir['name'])
         out += ' vcn {}'.format(self.adir['vcn'])
         out += ' bitmap {}'.format(self.adir['bitmap'])
@@ -1158,7 +1189,8 @@ class AdspMetadataFileExt(MftExtension):
                              offset)
 
     def dump_info(self, pref, comp_filter):
-        out = '{}{}'.format(pref, self.name)
+        super().dump_info(pref, comp_filter)
+        out = '{}'.format(pref)
         out += ' ver {}'.format(self.adir['version'])
         out += ' base offset {}'.format(self.adir['base_offset'])
         out += ' limit offset {}'.format(self.adir['limit_offset'])
@@ -1175,7 +1207,7 @@ class AdspManifest(Component):
 
     def dump_info(self, pref, comp_filter):
         hdr = self.cdir['adsp_mft_hdr']
-        out = '{}{} (ADSP Manifest)'.format(pref, self.name)
+        out = '{}{} (ADSP Manifest) file offset 0x{:x}'.format(pref, self.name, self.file_offset)
         out += ' name {}'.format(hdr.adir['name'])
         out += ' build ver {}'.format(hdr.adir['build_version'])
         out += ' feature mask {}'.format(hdr.adir['feature_mask'])
@@ -1386,6 +1418,112 @@ DSP_MEM_SPACE_EXT = {
     'ehl' : TGL_LP_MEMORY_SPACE,
 }
 
+
+def getCssManifest(parsed_fw):
+    "Also known as 'ADSP.man'"
+    cse_mft = parsed_fw.cdir['cse_mft']
+    return cse_mft.cdir['css_mft']
+
+
+def Erase(input_reader, start, length, padding):
+
+    padding = padding * (length // len(padding) + 1)
+    output_bytes = input_reader.read(start)
+
+    # Skip and replace with padding
+    input_reader.seek(length, 1)
+    output_bytes += padding[:length]
+
+    output_bytes += input_reader.read()
+
+    input_reader.seek(0)
+    return io.BytesIO(output_bytes)
+
+
+def EraseSignature(signed_input, parsed_fw):
+
+    hdr = getCssManifest(parsed_fw).cdir['css_mft_hdr']
+
+    return Erase(signed_input,
+                 hdr.adir['signature_start'].val,
+                 hdr.adir['signature_length'].val,
+                 b'Erased signature. ')
+
+
+def EraseCssManifestDate(dated_input, parsed_fw):
+
+    hdr = getCssManifest(parsed_fw).cdir['css_mft_hdr']
+
+    return Erase(dated_input,
+                 hdr.adir['date_start'].val,
+                 hdr.adir['date_length'].val,
+                 b'\x11' * 6) # = 1111/11/11
+
+
+def EraseCssManifest(image_input, parsed_fw):
+
+    css_man = getCssManifest(parsed_fw)
+
+    return Erase(image_input, css_man.file_offset,
+                 css_man.length, b"Erased CSS manifest. ")
+
+
+def EraseImrType(image_input, parsed_fw):
+
+    cse_mft = parsed_fw.cdir['cse_mft']
+    adsp_meta_ext = cse_mft.cdir['mft_ext0']
+
+    # IMR type is the very first field after extension type and length
+    imr_start = adsp_meta_ext.file_offset + 4 + 4
+
+    # Health check: re-read the imr_type to make sure the offset is
+    # still correct, no copy/paste/diverge.
+    true_imr_type = adsp_meta_ext.adir['adsp_imr_type'].val
+    image_input.seek(imr_start)
+    imr_type, = struct.unpack("<I", image_input.read(4))
+    assert imr_type == true_imr_type
+    image_input.seek(0)
+
+    return Erase(image_input, imr_start, 4, b'IMRt')
+
+
+def EraseVariables(input_path, parsed_fw, output_path):
+    """This is not smart but it gets the current job done. This entire
+    script should be re-written and based on a more advanced framework
+    like Construct, then a hierarchical, diffoscope-like diff should be
+    easy to implement on top.
+    """
+    with open(input_path, 'rb') as reader:
+
+        if True:
+            # Massive erasure required to compare .ri files produced by
+            # different tools (e.g. rimage vs MEU)
+            cse_mft = parsed_fw.cdir['cse_mft']
+            adsp_mft = parsed_fw.cdir['adsp_mft']
+
+            cse_plus_padding_len = adsp_mft.file_offset - cse_mft.file_offset
+
+            reader = Erase(reader, cse_mft.file_offset,
+                           cse_plus_padding_len,
+                           b'Erased CSE manifest + padding. ')
+
+        else:
+            # This is much smaller and enough to deal with date and
+            # random salt when signing with the same tool
+            reader = EraseCssManifestDate(reader, parsed_fw)
+            reader = EraseSignature(reader, parsed_fw)
+
+        with open(output_path, 'wb') as output:
+            for chunk in reader:
+                output.write(chunk)
+
+    assert input_path.stat().st_size == output_path.stat().st_size
+
+    with open(output_path, 'rb') as output:
+        chk256 = hashlib.sha256(output.read()).hexdigest()
+        print('sha256sum {0}\n{1} {0}'.format(output_path, chk256))
+
+
 def main(args):
     """ main function
     """
@@ -1410,6 +1548,10 @@ def main(args):
         add_lmap_mem_info(args.sof_ri_path, mem)
         print()
         mem.dump_info()
+
+    if args.erased_vars_image:
+        EraseVariables(pathlib.Path(args.sof_ri_path), fw_bin,
+                       args.erased_vars_image)
 
 if __name__ == "__main__":
     ARGS = parse_params()

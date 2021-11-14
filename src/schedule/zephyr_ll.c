@@ -50,7 +50,7 @@ static void zephyr_ll_task_done(struct zephyr_ll *sch,
 	task->state = SOF_TASK_STATE_FREE;
 
 	tr_info(&ll_tr, "task complete %p %pU", task, task->uid);
-	tr_info(&ll_tr, "num_tasks %d total_num_tasks %d",
+	tr_info(&ll_tr, "num_tasks %d total_num_tasks %ld",
 		sch->n_tasks, atomic_read(&sch->ll_domain->total_num_tasks));
 
 	/*
@@ -316,11 +316,15 @@ static int zephyr_ll_task_schedule(void *data, struct task *task, uint64_t start
 	list_for_item(list, &sch->tasks) {
 		task_iter = container_of(list, struct task, list);
 
-		/*
-		 * keep original start. TODO: this shouldn't be happening.
-		 * Remove after verification
-		 */
 		if (task_iter == task) {
+			/* if cancelled, reschedule the task */
+			if (task->state == SOF_TASK_STATE_CANCEL)
+				break;
+
+			/*
+			 * keep original start. TODO: this shouldn't be happening.
+			 * Remove after verification
+			 */
 			spin_unlock_irq(&sch->lock, flags);
 			tr_warn(&ll_tr, "task %p (%pU) already scheduled",
 				task, task->uid);
@@ -332,6 +336,13 @@ static int zephyr_ll_task_schedule(void *data, struct task *task, uint64_t start
 	if (sch->ll_domain->next_tick != UINT64_MAX &&
 	    sch->ll_domain->next_tick > task->start)
 		task->start = sch->ll_domain->next_tick;
+
+	if (task->state == SOF_TASK_STATE_CANCEL) {
+		/* do not queue the same task again */
+		task->state = SOF_TASK_STATE_QUEUED;
+		spin_unlock_irq(&sch->lock, flags);
+		return 0;
+	}
 
 	zephyr_ll_task_insert_unlocked(sch, task);
 
@@ -378,10 +389,10 @@ static int zephyr_ll_task_free(void *data, struct task *task)
 	 * one an additional flag must be used.
 	 */
 	switch (task->state) {
+	case SOF_TASK_STATE_INIT:
 	case SOF_TASK_STATE_FREE:
 		on_list = false;
 		/* fall through */
-	case SOF_TASK_STATE_INIT:
 	case SOF_TASK_STATE_QUEUED:
 		must_wait = false;
 		break;
@@ -434,7 +445,7 @@ static int zephyr_ll_task_cancel(void *data, struct task *task)
  * be active, but other schedulers ignore them too... And we don't need to free
  * the scheduler data - it's allocated in the SYS zone.
  */
-static void zephyr_ll_scheduler_free(void *data)
+static void zephyr_ll_scheduler_free(void *data, uint32_t flags)
 {
 	struct zephyr_ll *sch = data;
 

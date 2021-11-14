@@ -25,7 +25,6 @@ static int pipeline_comp_params_neg(struct comp_dev *current,
 				    int dir)
 {
 	struct pipeline_data *ppl_data = ctx->comp_data;
-	uint32_t flags = 0;
 	int err = 0;
 
 	pipe_dbg(current->pipeline, "pipeline_comp_params_neg(), current->comp.id = %u, dir = %u",
@@ -57,11 +56,11 @@ static int pipeline_comp_params_neg(struct comp_dev *current,
 	 * should explicitly configure the channels of the branched buffers.
 	 */
 	if (calling_buf) {
-		buffer_lock(calling_buf, &flags);
+		calling_buf = buffer_acquire_irq(calling_buf);
 		err = buffer_set_params(calling_buf,
 					&ppl_data->params->params,
 					BUFFER_UPDATE_FORCE);
-		buffer_unlock(calling_buf, flags);
+		calling_buf = buffer_release_irq(calling_buf);
 	}
 
 	return err;
@@ -148,33 +147,39 @@ static int pipeline_comp_hw_params(struct comp_dev *current,
 				   struct pipeline_walk_context *ctx, int dir)
 {
 	struct pipeline_data *ppl_data = ctx->comp_data;
-	uint32_t flags = 0;
 	int ret;
 
 	pipe_dbg(current->pipeline, "pipeline_comp_hw_params(), current->comp.id = %u, dir = %u",
 		 dev_comp_id(current), dir);
 
-	pipeline_for_each_comp(current, ctx, dir);
+	ret = pipeline_for_each_comp(current, ctx, dir);
+	if (ret < 0)
+		return ret;
 
 	/* Fetch hardware stream parameters from DAI component */
 	if (dev_comp_type(current) == SOF_COMP_DAI) {
 		ret = comp_dai_get_hw_params(current,
 					     &ppl_data->params->params, dir);
 		if (ret < 0) {
-			pipe_err(current->pipeline, "pipeline_find_dai_comp(): comp_dai_get_hw_params() error.");
+			pipe_err(current->pipeline,
+				 "pipeline_comp_hw_params(): failed getting DAI parameters: %d",
+				 ret);
 			return ret;
 		}
 	}
 
 	/* set buffer parameters */
 	if (calling_buf) {
-		buffer_lock(calling_buf, &flags);
-		buffer_set_params(calling_buf, &ppl_data->params->params,
-				  BUFFER_UPDATE_IF_UNSET);
-		buffer_unlock(calling_buf, flags);
+		calling_buf = buffer_acquire_irq(calling_buf);
+		ret = buffer_set_params(calling_buf, &ppl_data->params->params,
+					BUFFER_UPDATE_IF_UNSET);
+		calling_buf = buffer_release_irq(calling_buf);
+		if (ret < 0)
+			pipe_err(current->pipeline,
+				 "pipeline_comp_hw_params(): buffer_set_params(): %d", ret);
 	}
 
-	return 0;
+	return ret;
 }
 
 /* Send pipeline component params from host to endpoints.

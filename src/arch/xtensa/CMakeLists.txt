@@ -241,15 +241,19 @@ endif()
 target_link_libraries(sof_ld_flags INTERFACE "-Wl,-Map=sof.map")
 target_link_libraries(sof_ld_flags INTERFACE "-T${PROJECT_BINARY_DIR}/${platform_ld_script}")
 
+# Copy the linker output from the top-level to this subdirectory
 add_custom_target(
 	prepare_sof_post_process
+	# "global" .ELF target used everywhere and declared and produced at the top
 	DEPENDS sof
-	COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/sof sof-${fw_name}
+	COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/sof sof-pre
 )
 
 # contains steps that should be performed before fw image is ready for being
 # processed by tools like rimage and MEU
-add_custom_target(sof_post_process DEPENDS prepare_sof_post_process)
+add_custom_target(sof_post_process
+	DEPENDS process_base_module
+)
 
 # contains extra output that should be generated for bin target
 add_custom_target(bin_extras)
@@ -295,18 +299,24 @@ if(build_bootloader)
 
 	set(bootloader_binary_path bootloader-${fw_name})
 
+	# Add 'base_module' section to sof ELF
 	add_custom_target(
 		process_base_module
 		COMMAND ${CMAKE_OBJCOPY} -O binary -j .data ${PROJECT_BINARY_DIR}/src/platform/${platform_folder}/base_module mod-${fw_name}.bin
-		COMMAND ${CMAKE_OBJCOPY} --add-section .module=mod-${fw_name}.bin --set-section-flags .module=load,readonly sof-${fw_name}
+		COMMAND ${CMAKE_OBJCOPY} --add-section .module=mod-${fw_name}.bin --set-section-flags .module=load,readonly sof-pre sof-${fw_name}
 		DEPENDS prepare_sof_post_process base_module bootloader_dump
 		VERBATIM
 		USES_TERMINAL
 	)
 
-	add_dependencies(sof_post_process process_base_module)
 else()
 	set(bootloader_binary_path)
+
+	# Do nothing / pass-through
+	add_custom_target(process_base_module
+		COMMAND ${CMAKE_COMMAND} -E copy sof-pre sof-${fw_name}
+		DEPENDS prepare_sof_post_process
+	)
 endif()
 
 if(CONFIG_BUILD_VM_ROM)
@@ -376,7 +386,7 @@ add_custom_target(
 	COMMAND ${PROJECT_BINARY_DIR}/smex_ep/build/smex
 		-l sof-${fw_name}.ldc
 		sof-${fw_name}
-	DEPENDS sof_dump smex_ep
+	DEPENDS sof_post_process smex_ep
 	VERBATIM
 	USES_TERMINAL
 )
@@ -450,14 +460,10 @@ if(MEU_PATH OR DEFINED MEU_NO_SIGN) # Don't sign with rimage
 			-e
 			${bootloader_binary_path}
 			sof-${fw_name}
-		DEPENDS sof_dump rimage_ep
+		DEPENDS sof_post_process rimage_ep
 		VERBATIM
 		USES_TERMINAL
 	)
-
-	if(CONFIG_TRACE)
-		add_dependencies(run_rimage run_smex)
-	endif()
 
 	if(NOT DEFINED MEU_FLAGS)
 		set(MEU_FLAGS
@@ -495,14 +501,10 @@ else() # sign with rimage
 			-e
 			${bootloader_binary_path}
 			sof-${fw_name}
-		DEPENDS sof_dump rimage_ep
+		DEPENDS sof_post_process rimage_ep
 		VERBATIM
 		USES_TERMINAL
 	)
-
-	if (CONFIG_TRACE)
-		add_dependencies(run_rimage run_smex)
-	endif()
 
 	add_custom_target(run_meu DEPENDS run_rimage)
 endif() # sign with MEU / nothing / rimage
@@ -527,7 +529,56 @@ add_custom_target(
 	DEPENDS run_meu
 	VERBATIM
 	USES_TERMINAL
+	BYPRODUCTS sof-${fw_name}.ri # almost like a proper add_custom_command()
 )
+
+
+# Keep lists below in sync with rimage/config/*.toml
+
+# .ri not signed: nothing variable in it to erase.
+set(UNSIGNED_RI         byt cht hsw bdw sue)
+# NXP
+list(APPEND UNSIGNED_RI imx8 imx8x imx8m imx8ulp)
+# AMD
+list(APPEND UNSIGNED_RI rn)
+# Mediatek
+list(APPEND UNSIGNED_RI mt8195)
+
+# Signed and non-deterministic but sof_ri_info.py is not compatible with
+# manifest v1.5?  "CSE manifest magic number not found"
+set(UNSUPPORTED_RI skl kbl)
+
+if(${fw_name} IN_LIST UNSIGNED_RI) # mere copy
+	add_custom_command(OUTPUT reproducible.ri
+		COMMENT "Copying sof.ri to reproducible.ri as is"
+		# TODO: drop the glue_binary_files dependency once the
+		# edit-in-place and add_custom_target() messes are all fixed
+		DEPENDS glue_binary_files sof-${fw_name}.ri
+		COMMAND cmake -E copy sof-${fw_name}.ri reproducible.ri
+		VERBATIM
+		)
+elseif(${fw_name} IN_LIST UNSUPPORTED_RI)
+	add_custom_command(OUTPUT reproducible.ri
+		COMMENT "WARNING: sof-${fw_name}.ri is NOT reproducible, reproducible.ri is fake"
+		DEPENDS glue_binary_files sof-${fw_name}.ri
+		COMMAND cmake -E touch reproducible.ri
+		VERBATIM
+		)
+else() # strip variables
+	add_custom_command(OUTPUT reproducible.ri
+		COMMENT "Creating reproducible.ri"
+		DEPENDS glue_binary_files  sof-${fw_name}.ri
+		COMMAND ${PROJECT_SOURCE_DIR}/tools/sof_ri_info/sof_ri_info.py
+			--no_headers --no_modules --no_memory # could use a -q option...
+			--erase_vars reproducible.ri sof-${fw_name}.ri
+		VERBATIM
+		)
+endif()
+
+
+# Top-level 'bin' target collecting all dependencies.  Copies final .ri
+# file from current subdirectory to top level build directory
+# ${PROJECT_BINARY_DIR}.
 
 # TODO: get rid of ${fw_output_name} and ${fw_name} below. Different
 # platforms are already built in different build directories, we will
@@ -540,7 +591,7 @@ if(MEU_NO_SIGN)
 		COMMAND ${CMAKE_COMMAND} -E copy sof-${fw_name}.ri.met ${PROJECT_BINARY_DIR}/sof-${fw_output_name}.ri.met
 		COMMAND ${CMAKE_COMMAND} -E copy sof-${fw_name}.ri.uns ${PROJECT_BINARY_DIR}/sof.ri.uns
 		COMMAND ${CMAKE_COMMAND} -E copy sof-${fw_name}.ri.met ${PROJECT_BINARY_DIR}/sof.ri.met
-		DEPENDS run_meu bin_extras glue_binary_files
+		DEPENDS run_meu bin_extras glue_binary_files sof_dump
 		VERBATIM
 		USES_TERMINAL
 	)
@@ -549,7 +600,7 @@ else()
 		bin ALL
 		COMMAND ${CMAKE_COMMAND} -E copy sof-${fw_name}.ri ${PROJECT_BINARY_DIR}/sof-${fw_output_name}.ri
 		COMMAND ${CMAKE_COMMAND} -E copy sof-${fw_name}.ri ${PROJECT_BINARY_DIR}/sof.ri
-		DEPENDS run_meu bin_extras glue_binary_files
+		DEPENDS run_meu bin_extras glue_binary_files sof_dump reproducible.ri
 		VERBATIM
 		USES_TERMINAL
 	)

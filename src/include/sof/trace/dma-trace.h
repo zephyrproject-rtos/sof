@@ -39,6 +39,7 @@ struct dma_trace_data {
 	uint32_t enabled;
 	uint32_t copy_in_progress;
 	uint32_t stream_tag;
+	uint32_t active_stream_tag;
 	uint32_t dma_copy_align; /**< Minimal chunk of data possible to be
 				   *  copied by dma connected to host
 				   */
@@ -52,6 +53,7 @@ int dma_trace_host_buffer(struct dma_trace_data *d,
 			  struct dma_sg_elem_array *elem_array,
 			  uint32_t host_size);
 int dma_trace_enable(struct dma_trace_data *d);
+void dma_trace_disable(struct dma_trace_data *d);
 void dma_trace_flush(void *destination);
 void dma_trace_on(void);
 void dma_trace_off(void);

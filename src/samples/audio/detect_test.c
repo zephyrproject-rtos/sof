@@ -243,8 +243,14 @@ static int test_keyword_apply_config(struct comp_dev *dev,
 		cd->config.activation_shift = ACTIVATION_DEFAULT_SHIFT;
 
 	if (!cd->config.activation_threshold) {
-		cd->config.activation_threshold =
-			test_keyword_get_threshold(dev, sample_width);
+		ret = test_keyword_get_threshold(dev, sample_width);
+		if (ret < 0) {
+			comp_err(dev, "test_keyword_apply_config(): unsupported sample width %u",
+				 sample_width);
+			return ret;
+		}
+
+		cd->config.activation_threshold = ret;
 	}
 
 	return 0;
@@ -412,8 +418,14 @@ static int test_keyword_params(struct comp_dev *dev,
 		cd->keyphrase_samples = KEYPHRASE_DEFAULT_PREAMBLE_LENGTH;
 	}
 
-	cd->config.activation_threshold =
-		test_keyword_get_threshold(dev, params->sample_valid_bytes * 8);
+	err = test_keyword_get_threshold(dev, params->sample_valid_bytes * 8);
+	if (err < 0) {
+		comp_err(dev, "test_keyword_params(): unsupported sample width %u",
+			 params->sample_valid_bytes * 8);
+		return err;
+	}
+
+	cd->config.activation_threshold = err;
 
 	return 0;
 }
@@ -613,7 +625,6 @@ static int test_keyword_copy(struct comp_dev *dev)
 	struct comp_data *cd = comp_get_drvdata(dev);
 	struct comp_buffer *source;
 	uint32_t frames;
-	uint32_t flags = 0;
 
 	comp_dbg(dev, "test_keyword_copy()");
 
@@ -624,12 +635,12 @@ static int test_keyword_copy(struct comp_dev *dev)
 	if (!source->stream.avail)
 		return PPL_STATUS_PATH_STOP;
 
-	buffer_lock(source, &flags);
+	source = buffer_acquire_irq(source);
 	frames = audio_stream_get_avail_frames(&source->stream);
-	buffer_unlock(source, flags);
+	source = buffer_release_irq(source);
 
 	/* copy and perform detection */
-	buffer_invalidate(source, audio_stream_get_avail_bytes(&source->stream));
+	buffer_stream_invalidate(source, audio_stream_get_avail_bytes(&source->stream));
 	cd->detect_func(dev, &source->stream, frames);
 
 	/* calc new available */
@@ -663,8 +674,15 @@ static int test_keyword_prepare(struct comp_dev *dev)
 		/* Default threshold value has to be changed
 		 * according to host new format.
 		 */
-		cd->config.activation_threshold =
-			test_keyword_get_threshold(dev, valid_bits);
+		int ret = test_keyword_get_threshold(dev, valid_bits);
+
+		if (ret < 0) {
+			comp_err(dev, "test_keyword_prepare(): unsupported sample width %u",
+				 valid_bits);
+			return ret;
+		}
+
+		cd->config.activation_threshold = ret;
 	}
 
 	cd->data_blob = comp_get_data_blob(cd->model_handler,
