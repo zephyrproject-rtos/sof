@@ -22,13 +22,13 @@
 #include <sof/trace/trace.h>
 
 /* Zephyr includes */
-#include <device.h>
+#include <zephyr/device.h>
 #include <soc.h>
-#include <kernel.h>
+#include <zephyr/kernel.h>
 #include <version.h>
 
 #if !CONFIG_KERNEL_COHERENCE
-#include <arch/xtensa/cache.h>
+#include <zephyr/arch/xtensa/cache.h>
 #endif
 
 extern K_KERNEL_STACK_ARRAY_DEFINE(z_interrupt_stacks, CONFIG_MP_NUM_CPUS,

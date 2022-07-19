@@ -35,7 +35,7 @@
 #include <stdint.h>
 
 #ifdef __ZEPHYR__
-#include <kernel.h>
+#include <zephyr/kernel.h>
 #endif
 
 /* 5276b491-5b64-464e-8984-dc228ef9e6a1 */

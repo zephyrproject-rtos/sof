@@ -20,8 +20,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <kernel.h>
-#include <sys_clock.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys_clock.h>
 
 /*
  * Currently the Zephyr clock rate is part it's Kconfig known at build time.
