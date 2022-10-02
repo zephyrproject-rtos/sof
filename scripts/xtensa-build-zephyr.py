@@ -33,7 +33,8 @@ SOF_TOP = pathlib.Path(__file__).parents[1].resolve()
 west_top = pathlib.Path(SOF_TOP, "..").resolve()
 default_rimage_key = pathlib.Path(SOF_TOP, "keys", "otc_private_key.pem")
 
-sof_version = None
+sof_fw_version = None
+sof_build_version = None
 
 if py_platform.system() == "Windows":
 	xtensa_tools_version_postfix = "-win32"
@@ -85,6 +86,13 @@ platform_list = [
 		"IPC4_RIMAGE_DESC": "tgl-h-cavs.toml",
 		"XTENSA_CORE": "cavs2x_LX6HiFi3_2017_8",
 		"XTENSA_TOOLS_VERSION": f"RG-2017.8{xtensa_tools_version_postfix}",
+		"RIMAGE_KEY": pathlib.Path(SOF_TOP, "keys", "otc_private_key_3k.pem")
+	},
+	{
+		"name": "mtl",
+		"PLAT_CONFIG": "intel_adsp_ace15_mtpm",
+		"XTENSA_CORE": "ace10_LX7HiFi4_RI_2020_5",
+		"XTENSA_TOOLS_VERSION": f"RI-2020.5{xtensa_tools_version_postfix}",
 		"RIMAGE_KEY": pathlib.Path(SOF_TOP, "keys", "otc_private_key_3k.pem")
 	},
 	# NXP platforms
@@ -144,8 +152,9 @@ def parse_args():
 						help="List of platforms to build")
 	parser.add_argument("-d", "--debug", required=False, action="store_true",
 						help="Enable debug build")
-	parser.add_argument("-i", "--ipc", required=False, choices=["IPC3", "IPC4"],
-						default="IPC3", help="IPC major version")
+	parser.add_argument("-i", "--ipc", required=False, choices=["IPC4"],
+			    help="""Generic shortcut for: --overlay <platform>/ipc4_overlay.conf. Valid only
+for IPC3 platforms supporting IPC4 too.""")
     # NO SOF release will ever user the option --fw-naming.
     # This option is only for disguising SOF IPC4 as CAVS IPC4 and only in cases where
     # the kernel 'ipc_type' expects CAVS IPC4. In this way, developers and CI can test
@@ -387,16 +396,17 @@ def west_update():
 	execute_command(["west", "update"], check=True, timeout=3000, cwd=west_top)
 
 
-def get_sof_version(abs_build_dir):
-	"""[summary] Get version string major.minor.micro of SOF firmware
-	file. When building multiple platforms from the same SOF commit,
-	all platforms share the same version. So for the 1st platform,
-	generate the version string from sof_version.h and later platforms
-	will reuse it.
+def get_build_and_sof_version(abs_build_dir):
+	"""[summary] Get version string major.minor.micro and build of SOF
+	firmware file. When building multiple platforms from the same SOF
+	commit, all platforms share the same version. So for the 1st platform,
+	generate the version string from sof_version.h and later platforms will
+	reuse it.
 	"""
-	global sof_version
-	if sof_version:
-		return sof_version
+	global sof_fw_version
+	global sof_build_version
+	if sof_fw_version and sof_build_version:
+		return sof_fw_version, sof_build_version
 
 	versions = {}
 	with open(pathlib.Path(abs_build_dir,
@@ -405,9 +415,11 @@ def get_sof_version(abs_build_dir):
 			words = hline.split()
 			if words[0] == '#define':
 				versions[words[1]] = words[2]
-	sof_version = versions['SOF_MAJOR'] + '.' + versions['SOF_MINOR'] + '.' + \
+	sof_fw_version = versions['SOF_MAJOR'] + '.' + versions['SOF_MINOR'] + '.' + \
 		      versions['SOF_MICRO']
-	return sof_version
+	sof_build_version = versions['SOF_BUILD']
+
+	return sof_fw_version, sof_build_version
 
 def build_platforms():
 	global west_top, SOF_TOP
@@ -452,7 +464,9 @@ def build_platforms():
 			print(f"XTENSA_TOOLCHAIN_PATH={XTENSA_TOOLCHAIN_PATH}")
 			print(f"TOOLCHAIN_VER={TOOLCHAIN_VER}")
 
-			# set variables expected by xcc toolchain
+			# Set variables expected by xcc toolchain. CMake cannot set (evil) build-time
+			# environment variables at configure time:
+			# https://gitlab.kitware.com/cmake/community/-/wikis/FAQ#how-can-i-get-or-set-environment-variables
 			XTENSA_BUILDS_DIR=str(pathlib.Path(xtensa_tools_root_dir, "install", "builds",
 				TOOLCHAIN_VER).absolute())
 			XTENSA_SYSTEM = str(pathlib.Path(XTENSA_BUILDS_DIR, XTENSA_CORE, "config").absolute())
@@ -466,7 +480,7 @@ def build_platforms():
 		abs_build_dir = pathlib.Path(west_top, platform_build_dir_name)
 		if (pathlib.Path(abs_build_dir, "build.ninja").is_file()
 		    or pathlib.Path(abs_build_dir, "Makefile").is_file()):
-			if args.cmake_args:
+			if args.cmake_args and not args.pristine:
 				print(args.cmake_args)
 				raise RuntimeError("Some CMake arguments are ignored in incremental builds, "
 						   + f"you must delete {abs_build_dir} first")
@@ -540,7 +554,11 @@ def build_platforms():
 
 		sign_cmd += ["--tool-data", str(rimage_config), "--", "-k", str(signing_key)]
 
-		sign_cmd += ["-f", get_sof_version(abs_build_dir)]
+		sof_fw_version, sof_build_version = get_build_and_sof_version(abs_build_dir)
+
+		sign_cmd += ["-f", sof_fw_version]
+
+		sign_cmd += ["-b", sof_build_version]
 
 		if args.fw_naming == "AVS":
 			output_fwname="dsp_basefw.bin"

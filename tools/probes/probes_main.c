@@ -13,10 +13,6 @@
  *
  */
 
-#include <ipc/probe.h>
-#include <sof/math/numbers.h>
-#include "wave.h"
-
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -27,6 +23,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <ipc/probe_dma_frame.h>
+#include <sof/math/numbers.h>
+
+#include "wave.h"
 
 #define APP_NAME "sof-probes"
 
@@ -60,23 +61,6 @@ static void usage(void)
 	fprintf(stdout, "%s:\t -p file\tParse extracted file\n\n", APP_NAME);
 	fprintf(stdout, "%s:\t -h \t\tHelp, usage info\n", APP_NAME);
 	exit(0);
-}
-
-int write_data(char *path, char *data)
-{
-	FILE *fd;
-
-	fd = fopen(path, "w");
-	if (!fd) {
-		fprintf(stderr, "error: unable to open file %s, error %d\n",
-			path, errno);
-		return errno;
-	}
-
-	fprintf(fd, "%s", data);
-	fclose(fd);
-
-	return 0;
 }
 
 int get_buffer_file(struct wave_files *files, uint32_t buffer_id)
@@ -182,51 +166,47 @@ void finalize_wave_files(struct wave_files *files)
 	}
 }
 
-int validate_data_packet(struct probe_data_packet *data_packet)
+int validate_data_packet(struct probe_data_packet *packet)
 {
-	uint32_t received_crc;
-	uint32_t calc_crc;
+	uint64_t *checksump;
+	uint64_t sum;
 
-	received_crc = data_packet->checksum;
-	data_packet->checksum = 0;
-	calc_crc = crc32(0, (char *)data_packet, sizeof(*data_packet));
+	sum = (uint32_t) (packet->sync_word +
+			  packet->buffer_id  +
+			  packet->format +
+			  packet->timestamp_high +
+			  packet->timestamp_low +
+			  packet->data_size_bytes);
 
-	if (received_crc == calc_crc) {
-		return 0;
-	} else {
-		fprintf(stderr, "error: data packet for buffer %d is not valid: crc32: %d/%d\n",
-			data_packet->buffer_id, calc_crc, received_crc);
+	checksump = (uint64_t *) (packet->data + packet->data_size_bytes);
+
+	if (sum != *checksump) {
+		fprintf(stderr, "Checksum error 0x%016lx != 0x%016lx\n", sum, *checksump);
 		return -EINVAL;
 	}
-}
 
-int process_sync(struct probe_data_packet *packet, uint8_t **w_ptr, uint32_t *total_data_to_copy)
-{
-	struct probe_data_packet *temp_packet;
-
-	/* request to copy data_size from probe packet */
-	*total_data_to_copy = packet->data_size_bytes;
-
-	if (packet->data_size_bytes > PACKET_MAX_SIZE) {
-		temp_packet = realloc(packet,
-				      sizeof(struct probe_data_packet) + packet->data_size_bytes);
-		if (!temp_packet)
-			return -ENOMEM;
-	}
-
-	*w_ptr = (uint8_t *)&packet->data;
 	return 0;
 }
 
-static bool sync_word_at(uint8_t *buf, size_t len)
+int process_sync(struct probe_data_packet **packet, uint8_t **w_ptr, uint32_t *total_data_to_copy)
 {
-	if (len < sizeof(uint32_t))
-		return false;
+	struct probe_data_packet *temp_packet;
 
-	if (*((uint32_t *)buf) == PROBE_EXTRACT_SYNC_WORD)
-		return true;
+	/* request to copy data_size from probe packet and 64-bit checksum */
+	*total_data_to_copy = (*packet)->data_size_bytes + sizeof(uint64_t);
 
-	return false;
+	if (sizeof(struct probe_data_packet) + *total_data_to_copy > PACKET_MAX_SIZE) {
+		temp_packet = realloc(packet,
+				      sizeof(struct probe_data_packet) + *total_data_to_copy);
+		if (!temp_packet)
+			return -ENOMEM;
+
+		*packet = temp_packet;
+	}
+
+	*w_ptr = (uint8_t *)&(*packet)->data;
+
+	return 0;
 }
 
 void parse_data(char *file_in)
@@ -236,9 +216,8 @@ void parse_data(char *file_in)
 	struct probe_data_packet *packet;
 	uint8_t data[DATA_READ_LIMIT];
 	uint32_t total_data_to_copy = 0;
-	uint32_t data_to_copy = 0;
 	uint8_t *w_ptr;
-	int i, j, file;
+	int start, i, j, file;
 
 	enum p_state state = READY;
 
@@ -261,49 +240,44 @@ void parse_data(char *file_in)
 	memset(&data, 0, DATA_READ_LIMIT);
 	memset(&files, 0, sizeof(struct wave_files) * FILES_LIMIT);
 
-	/* data read loop to process DATA_READ_LIMIT bytes at each iteration */
+	start = 0;
+	/* Data read loop to process DATA_READ_LIMIT bytes at each
+	 * iteration.  If there is under sizeof(sync_word) bytes left
+	 * in the buffer when a new frame is searched for, the remaining
+	 * bytes are moved to the beginning of the buffer for the next
+	 * iteration.
+	 */
 	do {
-		i = fread(&data, 1, DATA_READ_LIMIT, fd_in);
+		i = fread(&data[start], 1, DATA_READ_LIMIT - start, fd_in);
+		i += start;
+		j = 0;
+		start = 0;
 
 		/* processing all loaded bytes */
-		for (j = 0; j < i; j++) {
-			/* check for SYNC */
-			if (sync_word_at(&data[j], i - j)) {
-				if (state != READY) {
-					fprintf(stderr, "error: wrong state %d, err %d\n",
-						state, errno);
-					free(packet);
-					exit(0);
-				}
-				memset(packet, 0, PACKET_MAX_SIZE);
-				/* request to copy full data packet */
-				total_data_to_copy = sizeof(struct probe_data_packet);
-				w_ptr = (uint8_t *)packet;
-				state = SYNC;
-			}
-			/* data copying section */
-			if (total_data_to_copy > 0) {
-				/* check if there is enough bytes loaded */
-				/* or copy partially if not */
-				if (j + total_data_to_copy > i) {
-					data_to_copy = i - j;
-					total_data_to_copy -= data_to_copy;
-				} else {
-					data_to_copy = total_data_to_copy;
-					total_data_to_copy = 0;
-				}
-				memcpy(w_ptr, data + j, data_to_copy);
-				w_ptr += data_to_copy;
-				j += data_to_copy - 1;
-			}
-
+		while (j < i) {
 			if (total_data_to_copy == 0) {
 				switch (state) {
 				case READY:
+					/* check for SYNC */
+					if (i - j < sizeof(packet->sync_word)) {
+						start = i - j;
+						memmove(&data[0], &data[j], start);
+						j += start;
+					} else if (*((uint32_t *)&data[j]) ==
+						   PROBE_EXTRACT_SYNC_WORD) {
+						memset(packet, 0, PACKET_MAX_SIZE);
+						/* request to copy full data packet */
+						total_data_to_copy =
+							sizeof(struct probe_data_packet);
+						w_ptr = (uint8_t *)packet;
+						state = SYNC;
+					} else {
+						j++;
+					}
 					break;
 				case SYNC:
 					/* SYNC -> CHECK */
-					if (process_sync(packet, &w_ptr, &total_data_to_copy) < 0) {
+					if (process_sync(&packet, &w_ptr, &total_data_to_copy) < 0) {
 						fprintf(stderr, "OOM, quitting\n");
 						goto err;
 					}
@@ -336,6 +310,22 @@ void parse_data(char *file_in)
 					state = READY;
 					break;
 				}
+			}
+			/* data copying section */
+			if (total_data_to_copy > 0) {
+				uint32_t data_to_copy;
+				/* check if there is enough bytes loaded */
+				/* or copy partially if not */
+				if (j + total_data_to_copy > i) {
+					data_to_copy = i - j;
+					total_data_to_copy -= data_to_copy;
+				} else {
+					data_to_copy = total_data_to_copy;
+					total_data_to_copy = 0;
+				}
+				memcpy(w_ptr, data + j, data_to_copy);
+				w_ptr += data_to_copy;
+				j += data_to_copy;
 			}
 		}
 	} while (i > 0);
