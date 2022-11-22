@@ -34,13 +34,13 @@ foreach(tplg ${TPLGS_UP})
 			${CMAKE_CURRENT_SOURCE_DIR}/../common/abi.m4
 			${CMAKE_CURRENT_SOURCE_DIR}/../${input}.m4
 			> ${output}.conf
-		DEPENDS abi_v1
+		DEPENDS abi_v1 ${CMAKE_BINARY_DIR}/topology/topology1/abi.h
 		VERBATIM
 		USES_TERMINAL
 	)
 
 	add_alsatplg_command(${output}.conf ${output}.tplg)
 
-	add_custom_target(topology_${output} DEPENDS ${output}.tplg)
-	add_dependencies(dsp_topologies1 topology_${output})
+	add_custom_target(dsp_topology_${output} DEPENDS ${output}.tplg)
+	add_dependencies(dsp_topologies1 dsp_topology_${output})
 endforeach()

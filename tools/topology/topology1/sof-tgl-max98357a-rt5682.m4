@@ -114,7 +114,7 @@ ifdef(`WAVES',`
 # PCM99 <---- volume <---- DMIC01 (dmic 48k capture)
 # PCM100 <---- kpb <---- DMIC16K (dmic 16k capture)
 
-ifdef(`GOOGLE_RTC_AUDIO_PROCESSING', `define(`SPK_MIC_PERIOD_US', 10000)', `define(`SPK_MIC_PERIOD_US', 1000)')
+ifdef(`SPK_MIC_PERIOD_US',`', `define(`SPK_MIC_PERIOD_US', 1000)')
 
 ifdef(`NO_AMP',`',`
 # Define pipeline id for sof-tgl-CODEC-rt5682.m4
@@ -133,7 +133,7 @@ define(`SPK_REF_DAI_NAME', concat(concat(`SSP', SPK_SSP_INDEX),`.IN'))')
 
 # to generate dmic setting with kwd when we have dmic
 # define channel
-define(CHANNELS, `4')
+ifdef(`CHANNELS', `', `define(`CHANNELS', 4)')
 # define kfbm with volume
 define(KFBM_TYPE, `vol-kfbm')
 # define pcm, pipeline and dai id
@@ -148,7 +148,7 @@ define(DMIC_PIPELINE_48k_CORE_ID, `1')
 
 ifdef(`GOOGLE_RTC_AUDIO_PROCESSING',
 	`ifdef(`RTNR',
-		`define(`DMICPROC', google-rtc-audio-processing-rtnr)',
+		`define(`DMICPROC', rtnr-google-rtc-audio-processing)',
 		`define(`DMICPROC', google-rtc-audio-processing)')'
 	`define(`DMIC_48k_PERIOD_US', 10000)'
 	,
@@ -170,6 +170,7 @@ define(KWD_PIPE_SCH_DEADLINE_US, 5000)
 ifdef(`NOHOTWORD',
 `
 define(NO16KDMIC)
+define(DMIC_48k_CORE_ID, 1)
 include(`platform/intel/intel-generic-dmic.m4')',
 `include(`platform/intel/intel-generic-dmic-kwd.m4')')
 

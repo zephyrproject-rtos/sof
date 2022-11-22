@@ -344,9 +344,15 @@ endif()
 if (CONFIG_SOC_SERIES_INTEL_CAVS_V25)
 
 	# Driver sources
+	if (CONFIG_IPC_MAJOR_4 AND CONFIG_ZEPHYR_NATIVE_DRIVERS)
+	zephyr_library_sources(
+		${SOF_IPC_PATH}/ipc-zephyr.c
+	)
+	else()
 	zephyr_library_sources(
 		${SOF_DRIVERS_PATH}/intel/cavs/ipc.c
 	)
+	endif()
 
 	zephyr_library_sources_ifdef(CONFIG_INTEL_HDA
 		${SOF_DRIVERS_PATH}/intel/hda/hda-dma.c
@@ -424,7 +430,7 @@ if (CONFIG_ACE_VERSION_1_5)
 
 	# Driver sources
 	zephyr_library_sources(
-		${SOF_DRIVERS_PATH}/intel/ace/ipc.c
+		${SOF_IPC_PATH}/ipc-zephyr.c
 	)
 
 	# Platform sources
@@ -432,6 +438,8 @@ if (CONFIG_ACE_VERSION_1_5)
 		${SOF_PLATFORM_PATH}/intel/ace/platform.c
 		${SOF_PLATFORM_PATH}/meteorlake/lib/clk.c
 		${SOF_PLATFORM_PATH}/intel/ace/lib/pm_runtime.c
+		${SOF_PLATFORM_PATH}/intel/ace/lib/clk.c
+		${SOF_PLATFORM_PATH}/intel/ace/lib/dma.c
 	)
 
 	# SOF core infrastructure - runs on top of Zephyr
@@ -471,9 +479,15 @@ if (CONFIG_SOC_SERIES_NXP_IMX8)
 
 	# SOF core infrastructure - runs on top of Zephyr
 	zephyr_library_sources(
-		${SOF_SRC_PATH}/schedule/ll_schedule.c
 		${SOF_SRC_PATH}/drivers/interrupt.c
 	)
+
+	# Zephyr DMA domain should only be used with zephyr_ll
+	if (NOT(CONFIG_DMA_DOMAIN))
+		zephyr_library_sources(${SOF_SRC_PATH}/schedule/ll_schedule.c)
+	else()
+		zephyr_library_sources(${SOF_SRC_PATH}/schedule/zephyr_ll.c)
+	endif()
 
 	set(PLATFORM "imx8")
 endif()
@@ -498,9 +512,15 @@ if (CONFIG_SOC_SERIES_NXP_IMX8M)
 
 	# SOF core infrastructure - runs on top of Zephyr
 	zephyr_library_sources(
-		${SOF_SRC_PATH}/schedule/ll_schedule.c
 		${SOF_SRC_PATH}/drivers/interrupt.c
 	)
+
+	# Zephyr DMA domain should only be used with zephyr_ll
+	if (NOT(CONFIG_DMA_DOMAIN))
+		zephyr_library_sources(${SOF_SRC_PATH}/schedule/ll_schedule.c)
+	else()
+		zephyr_library_sources(${SOF_SRC_PATH}/schedule/zephyr_ll.c)
+	endif()
 
 	set(PLATFORM "imx8m")
 endif()
@@ -553,18 +573,26 @@ zephyr_library_sources(
 	${SOF_SRC_PATH}/schedule/schedule.c
 
 	${SOF_SRC_PATH}/idc/zephyr_idc.c
+	${SOF_SRC_PATH}/lib-zephyr/cpu.c
 
 	# Bridge wrapper between SOF and Zephyr APIs - Will shrink over time.
 	wrapper.c
 	edf_schedule.c
 	schedule.c
+	lib/alloc.c
+
+	# Common library functions - Will be moved to Zephyr over time
+	lib.c
 )
 
-if(CONFIG_SCHEDULE_DMA_SINGLE_CHANNEL)
+if(CONFIG_SCHEDULE_DMA_SINGLE_CHANNEL AND NOT(CONFIG_DMA_DOMAIN))
 	zephyr_library_sources(${SOF_SRC_PATH}/schedule/dma_single_chan_domain.c)
 endif()
-if(CONFIG_SCHEDULE_DMA_MULTI_CHANNEL)
+if(CONFIG_SCHEDULE_DMA_MULTI_CHANNEL AND NOT(CONFIG_DMA_DOMAIN))
 	zephyr_library_sources(${SOF_SRC_PATH}/schedule/dma_multi_chan_domain.c)
+endif()
+if (CONFIG_DMA_DOMAIN)
+	zephyr_library_sources(${SOF_SRC_PATH}/schedule/zephyr_dma_domain.c)
 endif()
 
 if(CONFIG_COMP_BLOB)
@@ -617,10 +645,19 @@ zephyr_library_sources_ifdef(CONFIG_COMP_FIR
 )
 
 zephyr_library_sources_ifdef(CONFIG_COMP_IIR
+	${SOF_AUDIO_PATH}/eq_iir/eq_iir.c
+)
+
+zephyr_library_sources_ifdef(CONFIG_MATH_IIR_DF1
+	${SOF_MATH_PATH}/iir_df1_generic.c
+	${SOF_MATH_PATH}/iir_df1_hifi3.c
+	${SOF_MATH_PATH}/iir_df1.c
+)
+
+zephyr_library_sources_ifdef(CONFIG_MATH_IIR_DF2T
 	${SOF_MATH_PATH}/iir_df2t_generic.c
 	${SOF_MATH_PATH}/iir_df2t_hifi3.c
-	${SOF_MATH_PATH}/iir.c
-	${SOF_AUDIO_PATH}/eq_iir/eq_iir.c
+	${SOF_MATH_PATH}/iir_df2t.c
 )
 
 zephyr_library_sources_ifdef(CONFIG_COMP_ASRC

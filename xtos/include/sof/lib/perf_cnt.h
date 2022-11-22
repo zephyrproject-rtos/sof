@@ -75,10 +75,24 @@ struct perf_cnt_data {
  */
 #define perf_trace_simple(pcd, arg) perf_cnt_trace(arg, pcd)
 
-#if CONFIG_PERFORMANCE_COUNTERS_RUN_AVERAGE
-
 /* perf measurement windows size 2^x */
 #define PERF_CNT_CHECK_WINDOW_SIZE 10
+#define task_perf_avg_info(pcd, task_p, class)					\
+	tr_info(task_p, "perf_cycle task %p, %pU cpu avg %u peak %u",\
+		  class, (class)->uid, \
+		  (uint32_t)((pcd)->cpu_delta_sum),			\
+		  (uint32_t)((pcd)->cpu_delta_peak))
+#define task_perf_cnt_avg(pcd, trace_m, arg, class) do {                             \
+		(pcd)->cpu_delta_sum += (pcd)->cpu_delta_last;          \
+		if (++(pcd)->sample_cnt == 1 << PERF_CNT_CHECK_WINDOW_SIZE) { \
+			(pcd)->cpu_delta_sum >>= PERF_CNT_CHECK_WINDOW_SIZE;      \
+			trace_m(pcd, arg, class);                                 \
+			(pcd)->cpu_delta_sum = 0;                                 \
+			(pcd)->sample_cnt = 0;                                    \
+			(pcd)->plat_delta_peak = 0;                               \
+			(pcd)->cpu_delta_peak = 0;                                \
+		}                                                             \
+		} while (0)
 
 /** \brief Accumulates cpu timer delta samples calculated by perf_cnt_stamp().
  *
@@ -95,12 +109,10 @@ struct perf_cnt_data {
 			trace_m(pcd, arg);                                   \
 			(pcd)->cpu_delta_sum = 0;                            \
 			(pcd)->sample_cnt = 0;                               \
+			(pcd)->plat_delta_peak = 0;                          \
+			(pcd)->cpu_delta_peak = 0;                           \
 		}                                                            \
 	} while (0)
-
-#else
-#define perf_cnt_average(pcd, trace_m, arg)
-#endif /* CONFIG_PERFORMANCE_COUNTERS_RUN_AVERAGE */
 
 /** \brief Reads the timers and computes delta to the previous readings.
  *
@@ -115,12 +127,16 @@ struct perf_cnt_data {
 			(uint32_t)sof_cycle_get_64();				\
 		uint32_t cpu_ts =						\
 			(uint32_t)perf_cnt_get_cpu_ts();			\
-		if ((pcd)->plat_ts) {						\
+		if (plat_ts > (pcd)->plat_ts)					\
 			(pcd)->plat_delta_last = plat_ts - (pcd)->plat_ts;	\
-			(pcd)->cpu_delta_last = cpu_ts - (pcd)->cpu_ts;		\
-		}								\
-		(pcd)->plat_ts = plat_ts;					\
-		(pcd)->cpu_ts = cpu_ts;						\
+		else                                             \
+			(pcd)->plat_delta_last = UINT32_MAX - (pcd)->plat_ts   \
+									+ plat_ts; \
+		if (cpu_ts > (pcd)->cpu_ts)			\
+			(pcd)->cpu_delta_last = cpu_ts - (pcd)->cpu_ts; \
+		else								\
+			(pcd)->cpu_delta_last = UINT32_MAX - (pcd)->cpu_ts	\
+									+ cpu_ts;\
 		if ((pcd)->plat_delta_last > (pcd)->plat_delta_peak)		\
 			(pcd)->plat_delta_peak = (pcd)->plat_delta_last;	\
 		if ((pcd)->cpu_delta_last > (pcd)->cpu_delta_peak) {		\

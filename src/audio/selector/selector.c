@@ -53,6 +53,7 @@ DECLARE_SOF_RT_UUID("selector", selector_uuid, 0x32fe92c1, 0x1e17, 0x4fc2,
 
 DECLARE_TR_CTX(selector_tr, SOF_UUID(selector_uuid), LOG_LEVEL_INFO);
 
+#if CONFIG_IPC_MAJOR_3
 static int selector_verify_params(struct comp_dev *dev,
 				  struct sof_ipc_stream_params *params)
 {
@@ -165,12 +166,11 @@ static int selector_verify_params(struct comp_dev *dev,
 	return 0;
 }
 
-#if CONFIG_IPC_MAJOR_3
 static struct comp_dev *selector_new(const struct comp_driver *drv,
-				     struct comp_ipc_config *config,
-				     void *spec)
+				     const struct comp_ipc_config *config,
+				     const void *spec)
 {
-	struct ipc_config_process *ipc_process = spec;
+	const struct ipc_config_process *ipc_process = spec;
 	size_t bs = ipc_process->size;
 	struct comp_dev *dev;
 	struct comp_data *cd;
@@ -572,31 +572,38 @@ UT_STATIC void sys_comp_selector_init(void)
 
 DECLARE_MODULE(sys_comp_selector_init);
 #else
-static void build_config(struct comp_data *cd)
+static void build_config(struct comp_data *cd, struct module_config *cfg)
 {
 	enum sof_ipc_frame valid_format;
+	int i;
 
-	cd->source_format = cd->md.base_cfg.audio_fmt.depth;
-	audio_stream_fmt_conversion(cd->md.base_cfg.audio_fmt.depth,
-				    cd->md.base_cfg.audio_fmt.valid_bit_depth,
+	cd->source_format = cfg->base_cfg.audio_fmt.depth;
+	audio_stream_fmt_conversion(cfg->base_cfg.audio_fmt.depth,
+				    cfg->base_cfg.audio_fmt.valid_bit_depth,
 				    &cd->source_format,
 				    &valid_format,
-				    cd->md.base_cfg.audio_fmt.s_type);
+				    cfg->base_cfg.audio_fmt.s_type);
 
-	audio_stream_fmt_conversion(cd->md.output_format.depth,
-				    cd->md.output_format.valid_bit_depth,
+	audio_stream_fmt_conversion(cd->output_format.depth,
+				    cd->output_format.valid_bit_depth,
 				    &cd->sink_format,
 				    &valid_format,
-				    cd->md.output_format.s_type);
+				    cd->output_format.s_type);
 
-	cd->config.in_channels_count = cd->md.base_cfg.audio_fmt.channels_count;
-	cd->config.out_channels_count = cd->md.output_format.channels_count;
+	cd->config.in_channels_count = cfg->base_cfg.audio_fmt.channels_count;
+	cd->config.out_channels_count = cd->output_format.channels_count;
+
+	/* Build default coefficient array (unity Q10 on diagonal, i.e. pass-through mode) */
+	memset(&cd->coeffs_config, 0, sizeof(cd->coeffs_config));
+	for (i = 0; i < MIN(SEL_SOURCE_CHANNELS_MAX, SEL_SINK_CHANNELS_MAX); i++)
+		cd->coeffs_config.coeffs[i][i] = 1 << 10;
 }
 
 static int selector_init(struct processing_module *mod)
 {
 	struct module_data *md = &mod->priv;
 	struct module_config *cfg = &md->cfg;
+	const struct ipc4_base_module_cfg *base_cfg = cfg->init_data;
 	struct comp_data *cd;
 	int ret;
 
@@ -608,18 +615,20 @@ static int selector_init(struct processing_module *mod)
 
 	md->private = cd;
 
-	ret = memcpy_s(&cd->md, sizeof(cd->md), cfg->data, sizeof(cd->md));
+	ret = memcpy_s(&cd->output_format, sizeof(cd->output_format),
+		       base_cfg + 1, sizeof(struct ipc4_audio_format));
 	assert(!ret);
 
-	build_config(cd);
+	build_config(cd, cfg);
 
 	return 0;
 }
 
-static void set_selector_params(struct comp_dev *dev,
+static void set_selector_params(struct processing_module *mod,
 				struct sof_ipc_stream_params *params)
 {
-	struct comp_data *cd = comp_get_drvdata(dev);
+	struct comp_dev *dev = mod->dev;
+	struct comp_data *cd = module_get_private_data(mod);
 	struct comp_buffer __sparse_cache *source;
 	struct ipc4_audio_format *out_fmt;
 	struct comp_buffer *src_buf;
@@ -631,10 +640,10 @@ static void set_selector_params(struct comp_dev *dev,
 	else
 		params->channels = cd->config.out_channels_count;
 
-	params->rate = cd->md.base_cfg.audio_fmt.sampling_frequency;
+	params->rate = mod->priv.cfg.base_cfg.audio_fmt.sampling_frequency;
 	params->frame_fmt = cd->source_format;
 
-	out_fmt = &cd->md.output_format;
+	out_fmt = &cd->output_format;
 	for (i = 0; i < SOF_IPC_MAX_CHANNELS; i++)
 		params->chmap[i] = (out_fmt->ch_map >> i * 4) & 0xf;
 
@@ -672,7 +681,7 @@ static void set_selector_params(struct comp_dev *dev,
 	if (!source->hw_params_configured) {
 		struct ipc4_audio_format *in_fmt;
 
-		in_fmt = &cd->md.base_cfg.audio_fmt;
+		in_fmt = &mod->priv.cfg.base_cfg.audio_fmt;
 		source->stream.channels = in_fmt->channels_count;
 		source->stream.rate = in_fmt->sampling_frequency;
 		audio_stream_fmt_conversion(in_fmt->depth,
@@ -692,9 +701,54 @@ static void set_selector_params(struct comp_dev *dev,
 	buffer_release(source);
 }
 
+static int selector_verify_params(struct processing_module *mod,
+				  struct sof_ipc_stream_params *params)
+{
+	struct comp_dev *dev = mod->dev;
+	struct comp_data *cd = module_get_private_data(mod);
+	struct comp_buffer *buffer;
+	struct comp_buffer __sparse_cache *buffer_c;
+	uint32_t in_channels = cd->config.in_channels_count;
+	uint32_t out_channels = cd->config.out_channels_count;
+
+	comp_dbg(dev, "selector_verify_params()");
+
+	/* verify input channels */
+	if (in_channels == 0 || in_channels > SEL_SOURCE_CHANNELS_MAX) {
+		comp_err(dev, "selector_verify_params(): in_channels = %u", in_channels);
+		return -EINVAL;
+	}
+
+	/* verify output channels */
+	if (out_channels == 0 || out_channels > SEL_SINK_CHANNELS_MAX) {
+		comp_err(dev, "selector_verify_params(): out_channels = %u", out_channels);
+		return -EINVAL;
+	}
+
+	/* apply input/output channels count according to stream direction */
+	if (dev->direction == SOF_IPC_STREAM_PLAYBACK) {
+		params->channels = out_channels;
+		buffer = list_first_item(&dev->bsink_list, struct comp_buffer, source_list);
+	} else {
+		params->channels = in_channels;
+		buffer = list_first_item(&dev->bsource_list, struct comp_buffer, sink_list);
+	}
+	buffer_c = buffer_acquire(buffer);
+	buffer_set_params(buffer_c, params, BUFFER_UPDATE_FORCE);
+	buffer_release(buffer_c);
+
+	/* set component period frames */
+	buffer = list_first_item(&dev->bsink_list, struct comp_buffer, source_list);
+	buffer_c = buffer_acquire(buffer);
+	component_set_nearest_period_frames(dev, buffer_c->stream.rate);
+	buffer_release(buffer_c);
+
+	return 0;
+}
+
 /**
  * \brief Frees selector component.
- * \param[in,out] dev Selector base component device.
+ * \param[in,out] mod Selector base module device.
  */
 static int selector_free(struct processing_module *mod)
 {
@@ -709,7 +763,7 @@ static int selector_free(struct processing_module *mod)
 
 /**
  * \brief Sets selector component audio stream parameters.
- * \param[in,out] dev Selector base component device.
+ * \param[in,out] mod Selector base module device.
  * \return Error code.
  *
  * All done in prepare since we need to know source and sink component params.
@@ -717,16 +771,15 @@ static int selector_free(struct processing_module *mod)
 static int selector_params(struct processing_module *mod)
 {
 	struct sof_ipc_stream_params *params = mod->stream_params;
-	struct comp_dev *dev = mod->dev;
 	int err;
 
-	comp_info(dev, "selector_params()");
+	comp_info(mod->dev, "selector_params()");
 
-	set_selector_params(dev, params);
+	set_selector_params(mod, params);
 
-	err = selector_verify_params(dev, params);
+	err = selector_verify_params(mod, params);
 	if (err < 0) {
-		comp_err(dev, "selector_params(): pcm params verification failed.");
+		comp_err(mod->dev, "selector_params(): pcm params verification failed.");
 		return -EINVAL;
 	}
 
@@ -738,8 +791,17 @@ static int selector_set_config(struct processing_module *mod, uint32_t config_id
 			       const uint8_t *fragment, size_t fragment_size, uint8_t *response,
 			       size_t response_size)
 {
-	/* ToDo: add support */
-	return 0;
+	struct comp_data *cd = module_get_private_data(mod);
+
+	if (config_id == IPC4_SELECTOR_COEFFS_CONFIG_ID) {
+		if (data_offset_size != sizeof(cd->coeffs_config))
+			return -EINVAL;
+
+		memcpy_s(&cd->coeffs_config, sizeof(cd->coeffs_config), fragment, data_offset_size);
+		return 0;
+	}
+
+	return -EINVAL;
 }
 
 static int selector_get_config(struct processing_module *mod, uint32_t config_id,
@@ -751,7 +813,7 @@ static int selector_get_config(struct processing_module *mod, uint32_t config_id
 
 /**
  * \brief Copies and processes stream data.
- * \param[in,out] dev Selector base component device.
+ * \param[in,out] mod Selector base module device.
  * \return Error code.
  */
 static int selector_process(struct processing_module *mod,
@@ -776,7 +838,7 @@ static int selector_process(struct processing_module *mod,
 
 /**
  * \brief Prepares selector component for processing.
- * \param[in,out] dev Selector base component device.
+ * \param[in,out] mod Selector base module device.
  * \return Error code.
  */
 static int selector_prepare(struct processing_module *mod)
@@ -805,6 +867,9 @@ static int selector_prepare(struct processing_module *mod)
 	source_c = buffer_acquire(sourceb);
 	sink_c = buffer_acquire(sinkb);
 
+	audio_stream_init_alignment_constants(4, 1, &source_c->stream);
+	audio_stream_init_alignment_constants(4, 1, &sink_c->stream);
+
 	/* get source data format and period bytes */
 	cd->source_format = source_c->stream.frame_fmt;
 	cd->source_period_bytes = audio_stream_period_bytes(&source_c->stream, dev->frames);
@@ -826,6 +891,11 @@ static int selector_prepare(struct processing_module *mod)
 
 	md->mpd.in_buff_size = cd->source_period_bytes;
 	md->mpd.out_buff_size = cd->sink_period_bytes;
+
+	/* Selector module has 1 input buffer and 1 output buffer and produces period_bytes
+	 * every copy. Use 'simple copy' processing scheme.
+	 */
+	mod->simple_copy = true;
 
 	buffer_release(sink_c);
 	buffer_release(source_c);

@@ -26,6 +26,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+LOG_MODULE_REGISTER(lib_manager, CONFIG_SOF_LOG_LEVEL);
 /* 54cf5598-8b29-11ec-a8a3-0242ac120002 */
 
 DECLARE_SOF_UUID("lib_manager", lib_manager_uuid, 0x54cf5598, 0x8b29, 0x11ec,
@@ -230,11 +231,11 @@ static int lib_manager_free_module_instance(uint32_t module_id, uint32_t instanc
 
 uint32_t lib_manager_allocate_module(const struct comp_driver *drv,
 				     struct comp_ipc_config *ipc_config,
-				     void *ipc_specific_config)
+				     const void *ipc_specific_config)
 {
 	struct sof_man_fw_desc *desc;
 	struct sof_man_module *mod;
-	struct ipc4_base_module_cfg *base_cfg = ipc_specific_config;
+	const struct ipc4_base_module_cfg *base_cfg = ipc_specific_config;
 	int ret;
 	uint32_t module_id = IPC4_MOD_ID(ipc_config->id);
 	uint32_t entry_index = LIB_MANAGER_GET_MODULE_INDEX(module_id);
@@ -312,7 +313,7 @@ int lib_manager_register_module(struct sof_man_fw_desc *desc, int module_id)
 {
 	/* allocate new  comp_driver_info */
 	struct comp_driver_info *new_drv_info;
-	struct comp_driver *drv;
+	struct comp_driver *drv = NULL;
 	struct sof_man_module *mod;
 	int ret;
 
@@ -380,7 +381,7 @@ static int lib_manager_dma_buffer_init(struct lib_manager_dma_buf *buffer, uint3
 				       uint32_t align)
 {
 	/* allocate new buffer */
-	buffer->addr = rballoc_align(0, SOF_MEM_CAPS_DMA, size, align);
+	buffer->addr = (uintptr_t)rballoc_align(0, SOF_MEM_CAPS_DMA, size, align);
 
 	if (!buffer->addr) {
 		tr_err(&lib_manager_tr, "dma_buffer_init(): alloc failed");
@@ -393,8 +394,8 @@ static int lib_manager_dma_buffer_init(struct lib_manager_dma_buf *buffer, uint3
 	/* initialise the DMA buffer */
 
 	lib_manager_dma_buffer_update(buffer, buffer->addr, size);
-	tr_dbg(&lib_manager_tr, "lib_manager_dma_buffer_init(): 0x%x, 0x%x",
-	       buffer->addr, buffer->end_addr);
+	tr_dbg(&lib_manager_tr, "lib_manager_dma_buffer_init(): %p, %p",
+	       (void *)buffer->addr, (void *)buffer->end_addr);
 	return 0;
 }
 
@@ -566,7 +567,7 @@ static int lib_manager_allocate_store_mem(uint32_t *address, uint32_t size, uint
 static int lib_manager_store_library(struct lib_manager_dma_ext *dma_ext, void *man_buffer,
 				     uint32_t lib_id, uint32_t addr_align)
 {
-	uint32_t library_base_address;
+	uint32_t library_base_address = 0;
 	struct sof_man_fw_desc *man_desc =
 			(struct sof_man_fw_desc *)((char *)man_buffer + SOF_MAN_ELF_TEXT_OFFSET);
 	uint32_t preload_size = man_desc->header.preload_page_count * CONFIG_MM_DRV_PAGE_SIZE;
@@ -604,7 +605,7 @@ int lib_manager_load_library(uint32_t dma_id, uint32_t lib_id)
 	struct lib_manager_dma_ext dma_ext;
 	uint32_t addr_align;
 	int ret;
-	void *man_tmp_buffer;
+	void *man_tmp_buffer = NULL;
 
 	lib_manager_init();
 

@@ -9,8 +9,12 @@ file(GLOB TPLG_DEPS
 )
 
 add_custom_target(abi_v1
+	DEPENDS abi.h
+)
+add_custom_command(OUTPUT abi.h
 	COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/get_abi.sh ${SOF_ROOT_SOURCE_DIRECTORY}
-	DEPENDS ${TPLG_DEPS}
+	DEPENDS ${TPLG_DEPS} ${SOF_ROOT_SOURCE_DIRECTORY}/src/include/kernel/abi.h
+	# get_abi.h generates (a smaller) abi.h in the current directory
 	WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 	VERBATIM
 	USES_TERMINAL
@@ -127,6 +131,8 @@ set(TPLGS
 	"sof-icl-rt711-rt1308-rt715-hdmi\;sof-adl-rt711-l0-rt1316-l13-rt714-l2\;-DPLATFORM=adl\;-DUAJ_LINK=0\;-DAMP_1_LINK=1\;-DAMP_2_LINK=3\;-DEXT_AMP_REF\;-DMIC_LINK=2"
 	"sof-icl-rt711-rt1308-rt715-hdmi\;sof-adl-rt711-l2-rt1316-l01-rt714-l3\;-DPLATFORM=adl\;-DUAJ_LINK=2\;-DAMP_1_LINK=0\;-DAMP_2_LINK=1\;-DEXT_AMP_REF\;-DMIC_LINK=3"
 	"sof-icl-rt711-rt1308-rt715-hdmi\;sof-adl-rt711-l2-rt1316-l01\;-DPLATFORM=adl\;-DUAJ_LINK=2\;-DAMP_1_LINK=0\;-DAMP_2_LINK=1\;-DEXT_AMP_REF\;-DNO_LOCAL_MIC"
+	"sof-icl-rt711-rt1308-rt715-hdmi\;sof-rpl-rt711-l2-rt1316-l01-rt714-l3\;-DPLATFORM=rpl\;-DUAJ_LINK=2\;-DAMP_1_LINK=0\;-DAMP_2_LINK=1\;-DEXT_AMP_REF\;-DMIC_LINK=3"
+	"sof-icl-rt711-rt1308-rt715-hdmi\;sof-rpl-rt711-l0-rt1318-l12-rt714-l3\;-DPLATFORM=rpl\;-DUAJ_LINK=0\;-DAMP_1_LINK=1\;-DAMP_2_LINK=2\;-DEXT_AMP_REF\;-DMIC_LINK=3"
 	"sof-tgl-rt711-rt1308\;sof-tgl-rt711-rt1308-2ch\;-DCHANNELS=2\;-DEXT_AMP\;-DDMICPROC_FILTER1=eq_iir_coef_highpass_40hz_20db_48khz.m4\;-DDMIC16KPROC_FILTER1=eq_iir_coef_highpass_40hz_20db_16khz.m4\;-DPLATFORM=tgl"
 	"sof-tgl-rt711-rt1308\;sof-tgl-rt711-rt1308-4ch\;-DCHANNELS=4\;-DEXT_AMP\;-DDMICPROC_FILTER1=eq_iir_coef_highpass_40hz_20db_48khz.m4\;-DDMIC16KPROC_FILTER1=eq_iir_coef_highpass_40hz_20db_16khz.m4\;-DPLATFORM=tgl"
 	"sof-tgl-rt711-rt1308\;sof-tgl-rt711-4ch\;-DCHANNELS=4\;-DDMICPROC_FILTER1=eq_iir_coef_highpass_40hz_20db_48khz.m4\;-DDMIC16KPROC_FILTER1=eq_iir_coef_highpass_40hz_20db_16khz.m4\;-DPLATFORM=tgl"
@@ -141,6 +147,7 @@ set(TPLGS
 	"sof-icl-rt711-rt1308-rt715-hdmi\;sof-adl-rt1316-l2-mono-rt714-l0\;-DPLATFORM=adl\;-DMONO\;-DNOJACK\;-DAMP_1_LINK=2\;-DEXT_AMP_REF\;-DMIC_LINK=0"
 	"sof-icl-rt711-rt1308-rt715-hdmi\;sof-adl-rt1316-l12-rt714-l0\;-DPLATFORM=adl\;-DNOJACK\;-DAMP_1_LINK=1\;-DAMP_2_LINK=2\;-DEXT_AMP_REF\;-DMIC_LINK=0"
 	"sof-icl-rt711-rt1308-rt715-hdmi\;sof-adl-rt1316-l2-mono-rt714-l3\;-DPLATFORM=adl\;-DMONO\;-DNOJACK\;-DAMP_1_LINK=2\;-DEXT_AMP_REF\;-DMIC_LINK=3"
+	"sof-icl-rt711-rt1308-rt715-hdmi\;sof-rpl-rt1316-l12-rt714-l0\;-DPLATFORM=rpl\;-DNOJACK\;-DAMP_1_LINK=1\;-DAMP_2_LINK=2\;-DEXT_AMP_REF\;-DMIC_LINK=0"
 	## end SoundWire NOJACK topologies
 
 	"sof-ehl-rt5660\;sof-ehl-rt5660\;-DHDMI=1"
@@ -152,33 +159,36 @@ set(TPLGS
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98357a-rt5682-2way\;-DCODEC=MAX98360A_TDM\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=2\;-D2CH_2WAY"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98357a-rt5682-waves-2way\;-DCODEC=MAX98360A_TDM\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=2\;-D2CH_2WAY\;-DWAVES"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98357a-rt5682-4ch\;-DCODEC=MAX98360A_TDM\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=2\;-D4CH_PASSTHROUGH"
-	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682\;-DCODEC=MAX98360A\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DBT_OFFLOAD"
+	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682\;-DCODEC=MAX98360A\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DSPK_MIC_PERIOD_US=10000"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682-waves\;-DCODEC=MAX98360A\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DWAVES"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682-2way\;-DCODEC=MAX98360A_TDM\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-D2CH_2WAY\;-DBT_OFFLOAD"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682-4ch\;-DCODEC=MAX98360A_TDM\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-D4CH_PASSTHROUGH\;-DBT_OFFLOAD"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682-rtnr\;-DCODEC=MAX98360A\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DCHANNELS=2\;-DRTNR"
 	"sof-tgl-max98357a-rt5682\;sof-tgl-max98357a-rt5682-pdm1\;-DCODEC=MAX98357A\;-DFMT=s16le\;-DDMIC_DAI_LINK_16k_PDM=STEREO_PDM1\;-DPLATFORM=tgl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1"
-	"sof-tgl-max98357a-rt5682\;sof-tgl-max98357a-rt5682-pdm1-google-aec\;-DCODEC=MAX98357A\;-DFMT=s16le\;-DDMIC_DAI_LINK_16k_PDM=STEREO_PDM1\;-DPLATFORM=tgl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DGOOGLE_RTC_AUDIO_PROCESSING"
+	"sof-tgl-max98357a-rt5682\;sof-tgl-max98357a-rt5682-pdm1-google-aec\;-DCODEC=MAX98357A\;-DFMT=s16le\;-DDMIC_DAI_LINK_16k_PDM=STEREO_PDM1\;-DPLATFORM=tgl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DCHANNELS=2\;-DGOOGLE_RTC_AUDIO_PROCESSING"
 	"sof-tgl-max98357a-rt5682\;sof-tgl-max98357a-rt5682-pdm1-drceq\;-DCODEC=MAX98357A\;-DFMT=s16le\;-DDMIC_DAI_LINK_16k_PDM=STEREO_PDM1\;-DPLATFORM=tgl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DDRC_EQ"
 	"sof-tgl-max98357a-rt5682\;sof-tgl-rt1011-rt5682\;-DCODEC=RT1011\;-DFMT=s24le\;-DPLATFORM=tgl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1"
 	"sof-tgl-max98357a-rt5682\;sof-tgl-max98357a-rt5682-rtnr\;-DCODEC=MAX98357A\;-DFMT=s16le\;-DPLATFORM=tgl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DCHANNELS=2\;-DRTNR"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98390-rt5682\;-DCODEC=MAX98390\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DBT_OFFLOAD"
-	"sof-tgl-max98357a-rt5682\;sof-adl-max98390-rt5682-google-aec\;-DCODEC=MAX98390\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DGOOGLE_RTC_AUDIO_PROCESSING"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98390-rt5682-rtnr\;-DCODEC=MAX98390\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DCHANNELS=2\;-DRTNR\;-DNOHOTWORD\;-DDMICPROC=rtnr\;-DNO16KDMIC\;-DDMIC_48k_CORE_ID=1"
+	"sof-tgl-max98357a-rt5682\;sof-adl-max98390-rt5682-google-aec\;-DCODEC=MAX98390\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DCHANNELS=2\;-DGOOGLE_RTC_AUDIO_PROCESSING\;-DNOHOTWORD\;-DNO16KDMIC"
+	"sof-tgl-max98357a-rt5682\;sof-adl-max98390-rt5682-rtnr-google-aec\;-DCODEC=MAX98390\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DCHANNELS=2\;-DGOOGLE_RTC_AUDIO_PROCESSING\;-DRTNR\;-DNOHOTWORD\;-DNO16KDMIC\;-DSPK_MIC_PERIOD_US=10000"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98390-ssp2-rt5682-ssp0\;-DCODEC=MAX98390\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=2"
 	"sof-tgl-max98357a-rt5682\;sof-adl-rt5682\;-DNO_AMP\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682"
-	"sof-tgl-max98357a-rt5682\;sof-adl-rt1019-rt5682\;-DCODEC=RT1019\;-DFMT=s16le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1"
+	"sof-tgl-max98357a-rt5682\;sof-adl-rt1019-rt5682\;-DCODEC=RT1019\;-DFMT=s16le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DSPK_MIC_PERIOD_US=10000"
 	"sof-tgl-max98357a-rt5682\;sof-adl-cs35l41\;-DCODEC=CS35L41\;-DFMT=s24le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_ssp_amp\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DNO_HEADPHONE"
+	"sof-tgl-max98357a-rt5682\;sof-adl-cs35l41-google-aec-waves\;-DCODEC=CS35L41\;-DFMT=s24le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_ssp_amp\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DNO_HEADPHONE\;-DGOOGLE_RTC_AUDIO_PROCESSING\;-DWAVES\;-DNOHOTWORD\;-DNO16KDMIC\;-DSPK_MIC_PERIOD_US=10000"
 	"sof-tgl-max98373-rt5682\;sof-tgl-max98373-rt5682\;-DAMP_SSP=1"
 	"sof-tgl-max98373-rt5682\;sof-tgl-max98373-rt5682-igonr\;-DAMP_SSP=1\;-DIGO"
 	"sof-tgl-max98373-rt5682\;sof-tgl-max98373-rt5682-xperi\;-DAMP_SSP=1\;-DINCLUDE_IIR_EQ=1"
 	"sof-tgl-max98373-rt5682\;sof-tgl-rt5682-ssp0-max98373-ssp2\;-DAMP_SSP=2"
 	"sof-tgl-max98373-rt5682\;sof-tgl-rt5682-ssp0-max98373-ssp2-xperi\;-DAMP_SSP=2\;-DINCLUDE_IIR_EQ=1"
 	"sof-adl-nau8825\;sof-adl-nau8825\;-DNO_AMP\;-DBT_OFFLOAD"
-	"sof-adl-nau8825\;sof-adl-max98373-nau8825\;-DAMP_SSP=1\;-DSMART_AMP\;-DBT_OFFLOAD"
-	"sof-adl-nau8825\;sof-adl-max98373-nau8825-dts\;-DAMP_SSP=1\;-DSMART_AMP\;-DBT_OFFLOAD\;-DDTS=`DTS'"
-	"sof-adl-nau8825\;sof-adl-max98360a-nau8825\;-DAMP_SSP=1\;-DBT_OFFLOAD"
-	"sof-adl-nau8825\;sof-adl-rt1019-nau8825\;-DAMP_SSP=2"
+	"sof-adl-nau8825\;sof-adl-max98373-nau8825\;-DAMP_SSP=1\;-DSMART_AMP\;-DBT_OFFLOAD\;-DNOHOTWORD\;-DNO16KDMIC"
+	"sof-adl-nau8825\;sof-adl-max98373-nau8825-dts\;-DAMP_SSP=1\;-DSMART_AMP\;-DBT_OFFLOAD\;-DNOHOTWORD\;-DNO16KDMIC\;-DDTS=`DTS'"
+	"sof-adl-nau8825\;sof-adl-max98360a-nau8825\;-DCODEC=MAX98360A\;-DFMT=s16le\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DSPK_MIC_PERIOD_US=10000"
+	"sof-adl-nau8825\;sof-adl-rt1019-nau8825\;-DCODEC=RT1019P\;-DFMT=s16le\;-DAMP_SSP=2\;-DSPK_MIC_PERIOD_US=10000"
+	"sof-adl-nau8825\;sof-adl-rt1015-nau8825\;-DCODEC=RT1015P\;-DFMT=s32le\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DSPK_MIC_PERIOD_US=10000"
 	"sof-tgl-sdw-max98373-rt5682\;sof-tgl-sdw-max98373-rt5682\;-DCHANNELS=4\;-DPLATFORM=tgl"
 	"sof-tgl-sdw-max98373-rt5682\;sof-adl-sdw-max98373-rt5682\;-DCHANNELS=4\;-DPLATFORM=adl"
 	"sof-jsl-da7219\;sof-jsl-da7219\;-DPLATFORM=jsl"
@@ -227,6 +237,16 @@ set(TPLGS
 	"sof-glk-es8336\;sof-jsl-es8336-dmic4ch-ssp1\;-DPLATFORM=jsl\;-DSSP_NUM=1\;-DCHANNELS=4"
 	"sof-glk-es8336\;sof-jsl-es8336-dmic4ch-ssp2\;-DPLATFORM=jsl\;-DSSP_NUM=2\;-DCHANNELS=4"
 
+	"sof-glk-es8336\;sof-icl-es8336-ssp0\;-DPLATFORM=jsl\;-DSSP_NUM=0\;-DCHANNELS=0"
+	"sof-glk-es8336\;sof-icl-es8336-ssp1\;-DPLATFORM=jsl\;-DSSP_NUM=1\;-DCHANNELS=0"
+	"sof-glk-es8336\;sof-icl-es8336-ssp2\;-DPLATFORM=jsl\;-DSSP_NUM=2\;-DCHANNELS=0"
+	"sof-glk-es8336\;sof-icl-es8336-dmic2ch-ssp0\;-DPLATFORM=jsl\;-DSSP_NUM=0\;-DCHANNELS=2"
+	"sof-glk-es8336\;sof-icl-es8336-dmic2ch-ssp1\;-DPLATFORM=jsl\;-DSSP_NUM=1\;-DCHANNELS=2"
+	"sof-glk-es8336\;sof-icl-es8336-dmic2ch-ssp2\;-DPLATFORM=jsl\;-DSSP_NUM=2\;-DCHANNELS=2"
+	"sof-glk-es8336\;sof-icl-es8336-dmic4ch-ssp0\;-DPLATFORM=jsl\;-DSSP_NUM=0\;-DCHANNELS=4"
+	"sof-glk-es8336\;sof-icl-es8336-dmic4ch-ssp1\;-DPLATFORM=jsl\;-DSSP_NUM=1\;-DCHANNELS=4"
+	"sof-glk-es8336\;sof-icl-es8336-dmic4ch-ssp2\;-DPLATFORM=jsl\;-DSSP_NUM=2\;-DCHANNELS=4"
+
 	"sof-glk-es8336\;sof-cml-es8336-ssp0\;-DPLATFORM=cml\;-DSSP_NUM=0\;-DCHANNELS=0"
 	"sof-glk-es8336\;sof-cml-es8336-ssp1\;-DPLATFORM=cml\;-DSSP_NUM=1\;-DCHANNELS=0"
 	"sof-glk-es8336\;sof-cml-es8336-ssp2\;-DPLATFORM=cml\;-DSSP_NUM=2\;-DCHANNELS=0"
@@ -253,6 +273,7 @@ set(TPLGS
 	"sof-glk-es8336\;sof-adl-es8336-ssp1-hdmi-ssp02\;-DPLATFORM=adl\;-DSSP_NUM=1\;-DCHANNELS=0\;-DHDMI_1_SSP_NUM=0\;-DHDMI_2_SSP_NUM=2"
 
 	"sof-imx8-nocodec\;sof-imx8-nocodec"
+	"sof-imx8-wm8960-cs42888\;sof-imx8-wm8960-cs42888"
 	"sof-imx8-cs42888\;sof-imx8-cs42888"
 	"sof-imx8-nocodec-sai\;sof-imx8-nocodec-sai"
 	"sof-imx8-wm8960\;sof-imx8-wm8960\;-DPPROC=volume"
@@ -280,6 +301,7 @@ set(TPLGS
 	"sof-mt8195-mt6359-rt1019-rt5682\;sof-mt8195-mt6359-max98390-rt5682-rtnr\;-DCHANNELS=2\;-DRTNR"
 	"sof-mt8195-mt6359-rt1019-rt5682\;sof-mt8195-mt6359-max98390-rt5682-google-aec-rtnr\;-DGOOGLE_RTC_AUDIO_PROCESSING\;-DCHANNELS=2\;-DRTNR"
 	"sof-mt8186-mt6366\;sof-mt8186"
+	"sof-mt8186-mt6366\;sof-mt8186-dts\;-DDTS=`DTS'"
 	"sof-mt8186-mt6366\;sof-mt8186-mt6366-rt1019-rt5682s-waves\;-DWAVES=1"
 
 	"sof-acp-renoir\;sof-acp"
@@ -287,8 +309,9 @@ set(TPLGS
 	"sof-rn-rt5682-rt1019\;sof-rn-rt5682-rt1019-dts\;-DDTS=`DTS'"
 	"sof-rn-rt5682-max98360\;sof-rn-rt5682-max98360"
 	"sof-acp-rmb\;sof-acp-rmb"
+	"sof-acp-rmb-dmic4ch\;sof-acp-rmb-dmic4ch"
 	"sof-acp-rmb\;sof-rmb-rt5682s-rt1019"
-	"sof-acp-rmb\;sof-rmb-nau8825-max9860"
+	"sof-acp-rmb\;sof-rmb-nau8825-max98360"
 )
 
 # This empty 'production/' source subdirectory exists only to create the
@@ -316,6 +339,8 @@ foreach(tplg ${TPLGS})
 		endforeach()
 	endif()
 
+	# m4
+	# TODO: reduce duplication with subdirectories
 	add_custom_command(
 		OUTPUT production/${output}.conf
 		COMMAND m4 --fatal-warnings
@@ -329,11 +354,16 @@ foreach(tplg ${TPLGS})
 			${CMAKE_CURRENT_SOURCE_DIR}/${input}.m4
 			> production/${output}.conf
 		MAIN_DEPENDENCY ${CMAKE_CURRENT_SOURCE_DIR}/${input}.m4
-		DEPENDS abi_v1
+		# The 'abi.h' file is the real dependency that triggers
+		# a rebuild. 'abi_v1' is the target that avoids a race
+		# to rebuild abi.h. See the CMake FAQ or (better) Sam
+		# Thursfield's blog about custom targets.
+		DEPENDS abi_v1 ${CMAKE_CURRENT_BINARY_DIR}/abi.h
 		VERBATIM
 		USES_TERMINAL
 	)
 
+	# alsatplg
 	add_alsatplg_command(production/${output}.conf production/${output}.tplg)
 
 	add_custom_target(topology1_${output} DEPENDS production/${output}.tplg)

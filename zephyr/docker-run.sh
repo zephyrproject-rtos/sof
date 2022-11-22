@@ -37,10 +37,9 @@ SOF_TOP="$(cd "$(dirname "$0")"/.. && /bin/pwd)"
 main()
 {
     # Log container versions
-    for rep in zephyrprojectrtos/zephyr-build \
-               ghcr.io/zephyrproject-rtos/zephyr-build ; do
-        docker images --digests "$rep"
-    done
+    # Header
+    docker images --digests | grep REPOSITORY
+    docker images --digests | grep -i zephyr | sort
 
     if tty --quiet; then
         SOF_DOCKER_RUN="$SOF_DOCKER_RUN --tty"
@@ -48,14 +47,19 @@ main()
 
     cd "$SOF_TOP"
 
+    run_command lsb_release -a
     set -x
+    run_command "$@"
+}
 
+run_command()
+{
     docker run -i -v "$(west topdir)":/zep_workspace \
            --workdir /zep_workspace \
            $SOF_DOCKER_RUN \
            --env REAL_CC \
            ghcr.io/zephyrproject-rtos/zephyr-build:latest \
-           "$@"
+           ./sof/scripts/sudo-cwd.sh "$@"
 }
 
 main "$@"

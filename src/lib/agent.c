@@ -55,14 +55,12 @@ static void perf_sa_trace(struct perf_cnt_data *pcd, int ignored)
 		(uint32_t)((pcd)->cpu_delta_peak));
 }
 
-#if CONFIG_PERFORMANCE_COUNTERS_RUN_AVERAGE
 static void perf_avg_sa_trace(struct perf_cnt_data *pcd, int ignored)
 {
 	tr_info(&sa_tr, "perf sys_load cpu avg %u (current peak %u)",
 		(uint32_t)((pcd)->cpu_delta_sum),
 		(uint32_t)((pcd)->cpu_delta_peak));
 }
-#endif
 
 #endif
 
@@ -81,7 +79,7 @@ static enum task_state validate(void *data)
 #if CONFIG_AGENT_PANIC_ON_DELAY
 	/* panic timeout */
 	if (sa->panic_on_delay && delta > sa->panic_timeout)
-		panic(SOF_IPC_PANIC_IDLE);
+		sof_panic(SOF_IPC_PANIC_IDLE);
 #endif
 
 	/* warning timeout */

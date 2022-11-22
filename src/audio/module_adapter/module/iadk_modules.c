@@ -38,6 +38,7 @@
  *  - Processing Module Adapter - SOF base FW side of ProcessingModuleInterface API
  */
 
+LOG_MODULE_REGISTER(iadk_modules, CONFIG_SOF_LOG_LEVEL);
 /* ee2585f2-e7d8-43dc-90ab-4224e00c3e84 */
 DECLARE_SOF_RT_UUID("iadk_modules", intel_uuid, 0xee2585f2, 0xe7d8, 0x43dc,
 		    0x90, 0xab, 0x42, 0x24, 0xe0, 0x0c, 0x3e, 0x84);
@@ -55,20 +56,19 @@ static int iadk_modules_init(struct processing_module *mod)
 	uint32_t module_entry_point;
 	struct module_data *md = &mod->priv;
 	struct comp_dev *dev = mod->dev;
-	struct ipc4_base_module_cfg *src_cfg =
-				(struct ipc4_base_module_cfg *)md->cfg.data;
+	const struct ipc4_base_module_cfg *src_cfg = &md->cfg.base_cfg;
 	int ret = 0;
 	byte_array_t mod_cfg;
 
-	mod_cfg.data = md->cfg.data;
+	mod_cfg.data = (uint8_t *)md->cfg.init_data;
 	/* Intel modules expects DW size here */
-	mod_cfg.size = (md->cfg.size >> 2);
-	md->private = md->cfg.data;
+	mod_cfg.size = md->cfg.size >> 2;
+	md->private = mod;
 
 	struct comp_ipc_config *config = &(mod->dev->ipc_config);
 
 	/* At this point module resources are allocated and it is moved to L2 memory. */
-	module_entry_point = lib_manager_allocate_module(dev->drv, config, md->cfg.data);
+	module_entry_point = lib_manager_allocate_module(dev->drv, config, src_cfg);
 	if (module_entry_point == 0) {
 		comp_err(dev, "iadk_modules_init(), lib_manager_allocate_module() failed!");
 		return -EINVAL;
@@ -81,7 +81,7 @@ static int iadk_modules_init(struct processing_module *mod)
 	uint32_t log_handle = (uint32_t) mod->dev->drv->tctx;
 	/* Connect loadable module interfaces with module adapter entity. */
 	void *mod_adp = system_agent_start(md->module_entry_point, module_id,
-					   instance_id, 0, log_handle, (void *)&mod_cfg);
+					   instance_id, 0, log_handle, &mod_cfg);
 
 	md->module_adapter = mod_adp;
 
@@ -120,7 +120,6 @@ static int iadk_modules_init(struct processing_module *mod)
 static int iadk_modules_prepare(struct processing_module *mod)
 {
 	struct comp_dev *dev = mod->dev;
-	struct module_data *codec = &mod->priv;
 	int ret = 0;
 
 	comp_info(dev, "iadk_modules_prepare()");
@@ -245,12 +244,12 @@ static int iadk_modules_set_configuration(struct processing_module *mod, uint32_
  * \return: 0 upon success or error upon failure
  */
 static int iadk_modules_get_configuration(struct processing_module *mod, uint32_t config_id,
-					  enum module_cfg_fragment_position pos,
-					  uint32_t data_offset_size, const uint8_t *fragment,
+					  uint32_t *data_offset_size, uint8_t *fragment,
 					  size_t fragment_size)
 {
-	return iadk_wrapper_get_configuration(mod->priv.module_adapter, config_id, pos,
-					      data_offset_size, fragment, fragment_size);
+	return iadk_wrapper_get_configuration(mod->priv.module_adapter, config_id,
+					      MODULE_CFG_FRAGMENT_SINGLE, *data_offset_size,
+					      fragment, fragment_size);
 }
 
 /**
@@ -316,8 +315,8 @@ static struct module_interface iadk_interface = {
  *        happens at this point.
  */
 struct comp_dev *iadk_modules_shim_new(const struct comp_driver *drv,
-				       struct comp_ipc_config *config,
-				       void *spec)
+				       const struct comp_ipc_config *config,
+				       const void *spec)
 {
 	return module_adapter_new(drv, config, &iadk_interface, spec);
 }

@@ -47,15 +47,15 @@ DECLARE_SOF_RT_UUID("copier", copier_comp_uuid, 0x9ba00c83, 0xca12, 0x4a83,
 
 DECLARE_TR_CTX(copier_comp_tr, SOF_UUID(copier_comp_uuid), LOG_LEVEL_INFO);
 
-static pcm_converter_func get_converter_func(struct ipc4_audio_format *in_fmt,
-					     struct ipc4_audio_format *out_fmt,
+static pcm_converter_func get_converter_func(const struct ipc4_audio_format *in_fmt,
+					     const struct ipc4_audio_format *out_fmt,
 					     enum ipc4_gateway_type type,
 					     enum ipc4_direction_type);
 
 static int create_endpoint_buffer(struct comp_dev *parent_dev,
 				  struct copier_data *cd,
 				  struct comp_ipc_config *config,
-				  struct ipc4_copier_module_cfg *copier_cfg,
+				  const struct ipc4_copier_module_cfg *copier_cfg,
 				  enum ipc4_gateway_type type,
 				  int index)
 {
@@ -166,7 +166,7 @@ static int create_endpoint_buffer(struct comp_dev *parent_dev,
  */
 static int create_host(struct comp_dev *parent_dev, struct copier_data *cd,
 		       struct comp_ipc_config *config,
-		       struct ipc4_copier_module_cfg *copier_cfg,
+		       const struct ipc4_copier_module_cfg *copier_cfg,
 		       int dir)
 {
 	struct sof_uuid host = {0x8b9d100c, 0x6d78, 0x418f, {0x90, 0xa3, 0xe0,
@@ -231,7 +231,7 @@ e_buf:
 static int init_dai(struct comp_dev *parent_dev,
 		    const struct comp_driver *drv,
 		    struct comp_ipc_config *config,
-		    struct ipc4_copier_module_cfg *copier,
+		    const struct ipc4_copier_module_cfg *copier,
 		    struct pipeline *pipeline,
 		    struct ipc_config_dai *dai,
 		    enum ipc4_gateway_type type,
@@ -300,7 +300,7 @@ e_buf:
  */
 static int create_dai(struct comp_dev *parent_dev, struct copier_data *cd,
 		      struct comp_ipc_config *config,
-		      struct ipc4_copier_module_cfg *copier,
+		      const struct ipc4_copier_module_cfg *copier,
 		      struct pipeline *pipeline)
 {
 	struct sof_uuid id = {0xc2b00d27, 0xffbc, 0x4150, {0xa5, 0x1a, 0x24,
@@ -372,7 +372,7 @@ static int create_dai(struct comp_dev *parent_dev, struct copier_data *cd,
 			dai_count = alh_blob->alh_cfg.count;
 			for (i = 0; i < dai_count; i++)
 				dai_index[i] =
-				IPC4_ALH_DAI_INDEX(alh_blob->alh_cfg.mapping[i].alh_id);
+					IPC4_ALH_DAI_INDEX(alh_blob->alh_cfg.mapping[i].alh_id);
 		} else {
 			dai_index[dai_count - 1] = IPC4_ALH_DAI_INDEX(node_id.f.v_index);
 		}
@@ -429,16 +429,17 @@ static int init_pipeline_reg(struct comp_dev *dev)
 }
 
 static struct comp_dev *copier_new(const struct comp_driver *drv,
-				   struct comp_ipc_config *config,
-				   void *spec)
+				   const struct comp_ipc_config *config,
+				   const void *spec)
 {
-	struct ipc4_copier_module_cfg *copier = spec;
+	const struct ipc4_copier_module_cfg *copier = spec;
 	union ipc4_connector_node_id node_id;
 	struct ipc_comp_dev *ipc_pipe;
 	struct ipc *ipc = ipc_get();
 	struct copier_data *cd;
 	struct comp_dev *dev;
 	size_t size, config_size;
+	int i;
 
 	comp_cl_dbg(&comp_copier, "copier_new()");
 
@@ -459,7 +460,9 @@ static struct comp_dev *copier_new(const struct comp_driver *drv,
 
 	size = sizeof(*copier);
 	mailbox_hostbox_read(&cd->config, size, 0, size);
-	cd->out_fmt[0] = cd->config.out_fmt;
+
+	for (i = 0; i < IPC4_COPIER_MODULE_OUTPUT_PINS_COUNT; i++)
+		cd->out_fmt[i] = cd->config.out_fmt;
 	comp_set_drvdata(dev, cd);
 
 	list_init(&dev->bsource_list);
@@ -481,8 +484,8 @@ static struct comp_dev *copier_new(const struct comp_driver *drv,
 		switch (node_id.f.dma_type) {
 		case ipc4_hda_host_output_class:
 		case ipc4_hda_host_input_class:
-			if (create_host(dev, cd, config, copier, cd->direction)) {
-				comp_cl_err(&comp_copier, "unenable to create host");
+			if (create_host(dev, cd, &dev->ipc_config, copier, cd->direction)) {
+				comp_cl_err(&comp_copier, "unable to create host");
 				goto error_cd;
 			}
 
@@ -502,17 +505,17 @@ static struct comp_dev *copier_new(const struct comp_driver *drv,
 		case ipc4_i2s_link_input_class:
 		case ipc4_alh_link_output_class:
 		case ipc4_alh_link_input_class:
-		if (create_dai(dev, cd, config, copier, ipc_pipe->pipeline)) {
-			comp_cl_err(&comp_copier, "unenable to create dai");
-			goto error_cd;
-		}
+			if (create_dai(dev, cd, &dev->ipc_config, copier, ipc_pipe->pipeline)) {
+				comp_cl_err(&comp_copier, "unable to create dai");
+				goto error_cd;
+			}
 
-		if (cd->direction == SOF_IPC_STREAM_PLAYBACK)
-			ipc_pipe->pipeline->sink_comp = dev;
-		else
-			ipc_pipe->pipeline->source_comp = dev;
+			if (cd->direction == SOF_IPC_STREAM_PLAYBACK)
+				ipc_pipe->pipeline->sink_comp = dev;
+			else
+				ipc_pipe->pipeline->source_comp = dev;
 
-		break;
+			break;
 		default:
 			comp_cl_err(&comp_copier, "unsupported dma type %x",
 				    (uint32_t)node_id.f.dma_type);
@@ -568,8 +571,8 @@ static bool use_no_container_convert_function(enum sof_ipc_frame in,
 	return false;
 }
 
-static pcm_converter_func get_converter_func(struct ipc4_audio_format *in_fmt,
-					     struct ipc4_audio_format *out_fmt,
+static pcm_converter_func get_converter_func(const struct ipc4_audio_format *in_fmt,
+					     const struct ipc4_audio_format *out_fmt,
 					     enum ipc4_gateway_type type,
 					     enum ipc4_direction_type dir)
 {
@@ -590,7 +593,7 @@ static pcm_converter_func get_converter_func(struct ipc4_audio_format *in_fmt,
 static int copier_prepare(struct comp_dev *dev)
 {
 	struct copier_data *cd = comp_get_drvdata(dev);
-	int ret;
+	int ret, i;
 
 	comp_dbg(dev, "copier_prepare()");
 
@@ -608,7 +611,6 @@ static int copier_prepare(struct comp_dev *dev)
 		return PPL_STATUS_PATH_STOP;
 
 	if (cd->endpoint_num) {
-		int i;
 
 		for (i = 0; i < cd->endpoint_num; i++) {
 			ret = cd->endpoint[i]->drv->ops.prepare(cd->endpoint[i]);
@@ -618,13 +620,15 @@ static int copier_prepare(struct comp_dev *dev)
 	} else {
 		/* set up format conversion function */
 		cd->converter[0] = get_converter_func(&cd->config.base.audio_fmt,
-						      &cd->config.out_fmt, ipc4_gtw_none,
-						      ipc4_bidirection);
+							      &cd->config.out_fmt, ipc4_gtw_none,
+							      ipc4_bidirection);
 		if (!cd->converter[0]) {
 			comp_err(dev, "can't support for in format %d, out format %d",
 				 cd->config.base.audio_fmt.depth,  cd->config.out_fmt.depth);
-
 			ret = -EINVAL;
+		} else {
+			for (i = 1; i < IPC4_COPIER_MODULE_OUTPUT_PINS_COUNT; i++)
+				cd->converter[i] = cd->converter[i];
 		}
 	}
 
@@ -639,11 +643,6 @@ static int copier_reset(struct comp_dev *dev)
 	int i;
 
 	comp_dbg(dev, "copier_reset()");
-
-	if (dev->state == COMP_STATE_ACTIVE) {
-		comp_info(dev, "copier_config(): Component is in active state. Ignore resetting");
-		return 0;
-	}
 
 	cd->input_total_data_processed = 0;
 	cd->output_total_data_processed = 0;
@@ -745,7 +744,7 @@ static int copier_comp_trigger(struct comp_dev *dev, int cmd)
 		struct ipc4_pipeline_registers pipe_reg;
 
 		if (list_is_empty(&dai_copier->bsource_list)) {
-			comp_err(dev, "No source buffer binded to dai_copier");
+			comp_err(dev, "No source buffer bound to dai_copier");
 			return -EINVAL;
 		}
 
@@ -768,7 +767,7 @@ static int copier_comp_trigger(struct comp_dev *dev, int cmd)
 		pipe_reg.stream_start_offset += posn.dai_posn - pipe_reg.stream_end_offset;
 
 		if (list_is_empty(&dai_copier->bsource_list)) {
-			comp_err(dev, "No source buffer binded to dai_copier");
+			comp_err(dev, "No source buffer bound to dai_copier");
 			return -EINVAL;
 		}
 
@@ -854,7 +853,7 @@ static int copier_copy(struct comp_dev *dev)
 	} else {
 		/* component as input */
 		if (list_is_empty(&dev->bsource_list)) {
-			comp_err(dev, "No source buffer binded");
+			comp_err(dev, "No source buffer bound");
 			return -EINVAL;
 		}
 
@@ -882,17 +881,22 @@ static int copier_copy(struct comp_dev *dev)
 
 	/* zero or more components on outputs */
 	list_for_item(sink_list, &dev->bsink_list) {
+		struct comp_dev *sink_dev;
+
 		sink = container_of(sink_list, struct comp_buffer, source_list);
 		sink_c = buffer_acquire(sink);
+		sink_dev = sink_c->sink;
 		processed_data.sink_bytes = 0;
-		ret = do_conversion_copy(dev, cd, src_c, sink_c, &processed_data);
+		if (sink_dev->state == COMP_STATE_ACTIVE) {
+			ret = do_conversion_copy(dev, cd, src_c, sink_c, &processed_data);
+			cd->output_total_data_processed += processed_data.sink_bytes;
+		}
 		buffer_release(sink_c);
 		if (ret < 0) {
 			comp_err(dev, "failed to copy buffer for comp %x",
 				 dev->ipc_config.id);
 			break;
 		}
-		cd->output_total_data_processed += processed_data.sink_bytes;
 	}
 
 	if (!ret) {
@@ -1012,13 +1016,11 @@ static int copier_params(struct comp_dev *dev, struct sof_ipc_stream_params *par
 	return ret;
 }
 
-static int copier_set_sink_fmt(struct comp_dev *dev, void *data,
+static int copier_set_sink_fmt(struct comp_dev *dev, const void *data,
 			       int max_data_size)
 {
-	struct ipc4_copier_config_set_sink_format *sink_fmt;
+	const struct ipc4_copier_config_set_sink_format *sink_fmt = data;
 	struct copier_data *cd = comp_get_drvdata(dev);
-
-	sink_fmt = (struct ipc4_copier_config_set_sink_format *)data;
 
 	if (max_data_size < sizeof(*sink_fmt)) {
 		comp_err(dev, "error: max_data_size %d should be bigger than %d", max_data_size,
@@ -1051,7 +1053,7 @@ static int copier_set_sink_fmt(struct comp_dev *dev, void *data,
 	return 0;
 }
 
-static int set_attenuation(struct comp_dev *dev, uint32_t data_offset, char *data)
+static int set_attenuation(struct comp_dev *dev, uint32_t data_offset, const char *data)
 {
 	struct copier_data *cd = comp_get_drvdata(dev);
 	struct comp_buffer *sink;
@@ -1064,7 +1066,7 @@ static int set_attenuation(struct comp_dev *dev, uint32_t data_offset, char *dat
 		return -EINVAL;
 	}
 
-	attenuation = *(uint32_t *)data;
+	attenuation = *(const uint32_t *)data;
 	if (attenuation > 31) {
 		comp_err(dev, "attenuation %d is out of range", attenuation);
 		return -EINVAL;
@@ -1088,7 +1090,7 @@ static int copier_set_large_config(struct comp_dev *dev, uint32_t param_id,
 				   bool first_block,
 				   bool last_block,
 				   uint32_t data_offset,
-				   char *data)
+				   const char *data)
 {
 	comp_dbg(dev, "copier_set_large_config()");
 

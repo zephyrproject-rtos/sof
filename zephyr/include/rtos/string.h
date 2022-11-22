@@ -11,6 +11,9 @@
 #include <stddef.h>
 #include <errno.h>
 
+void *__vec_memcpy(void *dst, const void *src, size_t len);
+void *__vec_memset(void *dest, int data, size_t src_size);
+
 #ifdef __cplusplus
 extern "C" {
 #endif

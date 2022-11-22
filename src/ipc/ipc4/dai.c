@@ -30,9 +30,9 @@
 
 LOG_MODULE_DECLARE(ipc, CONFIG_SOF_LOG_LEVEL);
 
-int dai_config_dma_channel(struct comp_dev *dev, void *spec_config)
+int dai_config_dma_channel(struct comp_dev *dev, const void *spec_config)
 {
-	struct ipc4_copier_module_cfg *copier_cfg = spec_config;
+	const struct ipc4_copier_module_cfg *copier_cfg = spec_config;
 	struct dai_data *dd = comp_get_drvdata(dev);
 	struct ipc_config_dai *dai = &dd->ipc_config;
 	int channel;
@@ -171,7 +171,7 @@ static void get_llp_reg_info(struct comp_dev *dev, uint32_t *node_id, uint32_t *
 			*offset = offsetof(struct ipc4_fw_registers, llp_sndw_reading_slots);
 			*offset += id * sizeof(struct ipc4_llp_reading_slot);
 		} else {
-			comp_err(dev, "get_llp_reg_info(): sndw id %u out of array bounds.", id);
+			comp_dbg(dev, "get_llp_reg_info(): sndw id %u out of array bounds.", id);
 			*node_id = 0;
 		}
 
@@ -181,7 +181,7 @@ static void get_llp_reg_info(struct comp_dev *dev, uint32_t *node_id, uint32_t *
 			*offset = offsetof(struct ipc4_fw_registers, llp_gpdma_reading_slots);
 			*offset += id * sizeof(struct ipc4_llp_reading_slot);
 		} else {
-			comp_err(dev, "get_llp_reg_info(): gpdma id %u out of array bounds.", id);
+			comp_dbg(dev, "get_llp_reg_info(): gpdma id %u out of array bounds.", id);
 			*node_id = 0;
 		}
 
@@ -256,9 +256,9 @@ static void dai_dma_position_init(struct comp_dev *dev)
 }
 
 int dai_config(struct comp_dev *dev, struct ipc_config_dai *common_config,
-	       void *spec_config)
+	       const void *spec_config)
 {
-	struct ipc4_copier_module_cfg *copier_cfg = spec_config;
+	const struct ipc4_copier_module_cfg *copier_cfg = spec_config;
 	struct dai_data *dd = comp_get_drvdata(dev);
 	int size;
 	int ret;

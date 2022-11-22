@@ -41,6 +41,7 @@ struct ll_schedule_domain_ops {
 	void (*domain_clear)(struct ll_schedule_domain *domain);
 	bool (*domain_is_pending)(struct ll_schedule_domain *domain,
 				  struct task *task, struct comp_dev **comp);
+	void (*domain_task_cancel)(struct ll_schedule_domain *domain, uint32_t num_tasks);
 };
 
 struct ll_schedule_domain {
@@ -120,6 +121,14 @@ static inline void domain_clear(struct ll_schedule_domain *domain)
 	domain->next_tick = UINT64_MAX;
 }
 
+/* let the domain know that a task has been cancelled */
+static inline void domain_task_cancel(struct ll_schedule_domain *domain,
+				      uint32_t num_tasks)
+{
+	if (domain->ops->domain_task_cancel)
+		domain->ops->domain_task_cancel(domain, num_tasks);
+}
+
 static inline int domain_register(struct ll_schedule_domain *domain,
 				  struct task *task,
 				  void (*handler)(void *arg), void *arg)
@@ -192,6 +201,13 @@ static inline bool domain_is_pending(struct ll_schedule_domain *domain,
 #ifndef __ZEPHYR__
 struct ll_schedule_domain *timer_domain_init(struct timer *timer, int clk);
 #else
+#if CONFIG_DMA_DOMAIN
+#define dma_multi_chan_domain_init(dma_array, num_dma, clk, aggregated_irq)\
+	zephyr_dma_domain_init(dma_array, num_dma, clk)
+struct ll_schedule_domain *zephyr_dma_domain_init(struct dma *dma_array,
+						  uint32_t num_dma,
+						  int clk);
+#endif /* CONFIG_DMA_DOMAIN */
 struct ll_schedule_domain *zephyr_domain_init(int clk);
 #define timer_domain_init(timer, clk) zephyr_domain_init(clk)
 #endif

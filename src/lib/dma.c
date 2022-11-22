@@ -110,17 +110,18 @@ struct dma *dma_get(uint32_t dir, uint32_t cap, uint32_t dev, uint32_t flags)
 		if (ret < 0) {
 			tr_err(&dma_tr, "dma_get(): dma-probe failed id = %d, ret = %d",
 			       dmin->plat_data.id, ret);
+			goto out;
 		}
 	}
-	if (!ret)
-		dmin->sref++;
+
+	dmin->sref++;
 
 	tr_info(&dma_tr, "dma_get() ID %d sref = %d busy channels %ld",
 		dmin->plat_data.id, dmin->sref,
 		atomic_read(&dmin->num_channels_busy));
-
+out:
 	k_spin_unlock(&dmin->lock, key);
-	return dmin;
+	return !ret ? dmin : NULL;
 }
 
 void dma_put(struct dma *dma)
@@ -128,7 +129,10 @@ void dma_put(struct dma *dma)
 	k_spinlock_key_t key;
 
 	key = k_spin_lock(&dma->lock);
-	--dma->sref;
+	if (--dma->sref == 0) {
+		rfree(dma->chan);
+		dma->chan = NULL;
+	}
 
 	tr_info(&dma_tr, "dma_put(), dma = %p, sref = %d",
 		dma, dma->sref);

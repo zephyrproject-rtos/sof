@@ -53,7 +53,7 @@ bool comp_is_current_data_blob_valid(struct comp_data_blob_handler
  * @param init_data Initial data blob values
  */
 int comp_init_data_blob(struct comp_data_blob_handler *blob_handler,
-			uint32_t size, void *init_data);
+			uint32_t size, const void *init_data);
 
 /**
  * Handles IPC set command.
@@ -76,6 +76,19 @@ int comp_data_blob_set_cmd(struct comp_data_blob_handler *blob_handler,
 int comp_data_blob_set(struct comp_data_blob_handler *blob_handler,
 		       enum module_cfg_fragment_position pos, uint32_t data_offset_size,
 		       const uint8_t *fragment, size_t fragment_size);
+
+/**
+ * Handles IPC4 set large config.
+ *
+ * @param blob_handler: Data blob handler
+ * @param first_block: Flag indicates it is a first block of data
+ * @param last_block: Flag indicates it is a last block of data
+ * @param data_offset: Size/offset of the data being sent
+ * @param data: Pointer to the data array
+ */
+int ipc4_comp_data_blob_set(struct comp_data_blob_handler *blob_handler,
+			    bool first_block, bool last_block,
+			    uint32_t data_offset, const char *data);
 /**
  * Handles IPC get command.
  * @param blob_handler Data blob handler

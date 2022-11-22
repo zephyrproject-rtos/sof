@@ -34,8 +34,8 @@
 
 #define DECLARE_MODULE_ADAPTER(adapter, uuid, tr) \
 static struct comp_dev *module_##adapter##_shim_new(const struct comp_driver *drv, \
-					 struct comp_ipc_config *config, \
-					 void *spec) \
+					 const struct comp_ipc_config *config, \
+					 const void *spec) \
 { \
 	return module_adapter_new(drv, config, &(adapter), spec);\
 } \
@@ -108,6 +108,10 @@ struct module_config {
 	size_t size; /**< Specifies the size of whole config */
 	bool avail; /**< Marks config as available to use.*/
 	void *data; /**< tlv config, a pointer to memory where config is stored. */
+	const void *init_data; /**< Initial IPC configuration. */
+#if CONFIG_IPC_MAJOR_4
+	struct ipc4_base_module_cfg base_cfg;
+#endif
 };
 
 /**
@@ -176,7 +180,7 @@ struct processing_module {
 /*****************************************************************************/
 /* Module generic interfaces						     */
 /*****************************************************************************/
-int module_load_config(struct comp_dev *dev, void *cfg, size_t size);
+int module_load_config(struct comp_dev *dev, const void *cfg, size_t size);
 int module_init(struct processing_module *mod, struct module_interface *interface);
 void *module_allocate_memory(struct processing_module *mod, uint32_t size, uint32_t alignment);
 int module_free_memory(struct processing_module *mod, void *ptr);
@@ -194,8 +198,8 @@ int module_set_configuration(struct processing_module *mod,
 			     size_t response_size);
 
 struct comp_dev *module_adapter_new(const struct comp_driver *drv,
-				    struct comp_ipc_config *config,
-				    struct module_interface *interface, void *spec);
+				    const struct comp_ipc_config *config,
+				    struct module_interface *interface, const void *spec);
 int module_adapter_prepare(struct comp_dev *dev);
 int module_adapter_params(struct comp_dev *dev, struct sof_ipc_stream_params *params);
 int module_adapter_copy(struct comp_dev *dev);
@@ -204,9 +208,20 @@ int module_adapter_trigger(struct comp_dev *dev, int cmd);
 void module_adapter_free(struct comp_dev *dev);
 int module_adapter_reset(struct comp_dev *dev);
 int module_set_large_config(struct comp_dev *dev, uint32_t param_id, bool first_block,
-			    bool last_block, uint32_t data_offset, char *data);
+			    bool last_block, uint32_t data_offset, const char *data);
 int module_get_large_config(struct comp_dev *dev, uint32_t param_id, bool first_block,
 			    bool last_block, uint32_t *data_offset, char *data);
 int module_adapter_get_attribute(struct comp_dev *dev, uint32_t type, void *value);
+
+static inline void module_update_buffer_position(struct input_stream_buffer *input_buffers,
+						 struct output_stream_buffer *output_buffers,
+						 uint32_t frames)
+{
+	struct audio_stream __sparse_cache *source = input_buffers->data;
+	struct audio_stream __sparse_cache *sink = output_buffers->data;
+
+	input_buffers->consumed += audio_stream_frame_bytes(source) * frames;
+	output_buffers->size += audio_stream_frame_bytes(sink) * frames;
+}
 
 #endif /* __SOF_AUDIO_MODULE_GENERIC__ */

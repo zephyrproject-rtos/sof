@@ -28,6 +28,17 @@
 #include <sof/schedule/ll_schedule.h>
 #include <sof/schedule/ll_schedule_domain.h>
 #include <ipc/trace.h>
+#if CONFIG_IPC_MAJOR_4
+#include <ipc4/fw_reg.h>
+#endif
+#ifdef CONFIG_ZEPHYR_LOG
+#include <zephyr/logging/log_ctrl.h>
+#include <user/abi_dbg.h>
+#include <sof_versions.h>
+#include <version.h>
+#endif
+
+LOG_MODULE_REGISTER(init, CONFIG_SOF_LOG_LEVEL);
 
 /* main firmware context */
 static struct sof sof;
@@ -134,13 +145,14 @@ static int secondary_core_restore(void)
 int secondary_core_init(struct sof *sof)
 {
 	int err;
+	struct ll_schedule_domain *dma_domain;
 
 #ifndef __ZEPHYR__
 	/* init architecture */
 	trace_point(TRACE_BOOT_ARCH);
 	err = arch_init();
 	if (err < 0)
-		panic(SOF_IPC_PANIC_ARCH);
+		sof_panic(SOF_IPC_PANIC_ARCH);
 
 	/* check whether we are in a cold boot process or not (e.g. D0->D0ix
 	 * flow when primary core disables all secondary cores). If not, we do
@@ -164,7 +176,10 @@ int secondary_core_init(struct sof *sof)
 #endif
 	trace_point(TRACE_BOOT_PLATFORM_SCHED);
 	scheduler_init_ll(timer_domain_get());
-	scheduler_init_ll(dma_domain_get());
+
+	dma_domain = dma_domain_get();
+	if (dma_domain)
+		scheduler_init_ll(dma_domain);
 
 	/* initialize IDC mechanism */
 	trace_point(TRACE_BOOT_PLATFORM_IDC);
@@ -184,6 +199,36 @@ int secondary_core_init(struct sof *sof)
 
 #endif
 
+static void print_version_banner(void)
+{
+	/*
+	 * Non-Zephyr builds emit the version banner in DMA-trace
+	 * init and this is done at a later time as otherwise the
+	 * banner would be lost. With Zephyr logging subsystem in use,
+	 * we can simply print the banner at boot.
+	 *
+	 * META_QUOTE(SOF_SRC_HASH) is part of the format string so it
+	 * is part of log dictionary meta data and does not go to
+	 * the firmware binary (in case dictionary logging is used).
+	 * The value printed to log will be different from
+	 * SOF_SRC_HASH in case of mismatch.
+	 */
+#ifdef CONFIG_ZEPHYR_LOG
+	LOG_INF("FW ABI 0x%x DBG ABI 0x%x tags SOF:" SOF_GIT_TAG " zephyr:" \
+		META_QUOTE(BUILD_VERSION) " src hash 0x%08x (ref hash " \
+		META_QUOTE(SOF_SRC_HASH) ")",
+		SOF_ABI_VERSION, SOF_ABI_DBG_VERSION, SOF_SRC_HASH);
+#endif
+}
+
+#ifdef CONFIG_ZEPHYR_LOG
+static log_timestamp_t default_get_timestamp(void)
+{
+	return IS_ENABLED(CONFIG_LOG_TIMESTAMP_64BIT) ?
+		sys_clock_tick_get() : k_cycle_get_32();
+}
+#endif
+
 static int primary_core_init(int argc, char *argv[], struct sof *sof)
 {
 	/* setup context */
@@ -194,7 +239,7 @@ static int primary_core_init(int argc, char *argv[], struct sof *sof)
 	/* init architecture */
 	trace_point(TRACE_BOOT_ARCH);
 	if (arch_init() < 0)
-		panic(SOF_IPC_PANIC_ARCH);
+		sof_panic(SOF_IPC_PANIC_ARCH);
 
 	/* initialise system services */
 	trace_point(TRACE_BOOT_SYS_HEAP);
@@ -204,10 +249,17 @@ static int primary_core_init(int argc, char *argv[], struct sof *sof)
 	interrupt_init(sof);
 #endif /* __ZEPHYR__ */
 
+#ifdef CONFIG_ZEPHYR_LOG
+	log_set_timestamp_func(default_get_timestamp,
+			       sys_clock_hw_cycles_per_sec());
+#endif
+
 #if CONFIG_TRACE
 	trace_point(TRACE_BOOT_SYS_TRACES);
 	trace_init(sof);
 #endif
+
+	print_version_banner();
 
 	trace_point(TRACE_BOOT_SYS_NOTIFIER);
 	init_system_notify(sof);
@@ -217,8 +269,14 @@ static int primary_core_init(int argc, char *argv[], struct sof *sof)
 
 	/* init the platform */
 	if (platform_init(sof) < 0)
-		panic(SOF_IPC_PANIC_PLATFORM);
+		sof_panic(SOF_IPC_PANIC_PLATFORM);
 
+#if CONFIG_IPC_MAJOR_4
+	/* Set current abi version of the IPC4 FwRegisters layout */
+	size_t ipc4_abi_ver_offset = offsetof(struct ipc4_fw_registers, abi_ver);
+
+	mailbox_sw_reg_write(ipc4_abi_ver_offset, IPC4_FW_REGS_ABI_VER);
+#endif
 	trace_point(TRACE_BOOT_PLATFORM);
 
 #if CONFIG_NO_SECONDARY_CORE_ROM
@@ -244,7 +302,7 @@ int main(int argc, char *argv[])
 #endif
 
 	/* should never get here */
-	panic(SOF_IPC_PANIC_TASK);
+	sof_panic(SOF_IPC_PANIC_TASK);
 	return err;
 }
 

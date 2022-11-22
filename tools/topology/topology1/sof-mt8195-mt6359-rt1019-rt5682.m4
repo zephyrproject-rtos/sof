@@ -53,7 +53,15 @@ define(matrix2, `ROUTE_MATRIX(3,
 
 ifdef(`GOOGLE_RTC_AUDIO_PROCESSING', `MUXDEMUX_CONFIG(demux_priv_1, 2, LIST_NONEWLINE(`', `matrix1,', `matrix2'))')
 ifdef(`GOOGLE_RTC_AUDIO_PROCESSING', `define(`SPK_PERIOD_US', 10000)', `define(`SPK_PERIOD_US', 1000)')
-ifdef(`GOOGLE_RTC_AUDIO_PROCESSING', `define(`MIC_PERIOD_US', 10000)', `define(`MIC_PERIOD_US', 2000)')
+
+ifdef(`GOOGLE_RTC_AUDIO_PROCESSING',
+	`define(`MIC_PERIOD_US', 10000)'
+	,
+	`ifdef(`RTNR',
+# 5ms period is required for RTNR build 20220728 and later versions
+		`define(`MIC_PERIOD_US', 5000)',
+        `define(`MIC_PERIOD_US', 2000)')'
+)
 
 #
 # Define the pipelines
@@ -92,7 +100,7 @@ PIPELINE_PCM_ADD(
 PIPELINE_PCM_ADD(
 	ifdef(`RTNR',
     ifdef(`GOOGLE_RTC_AUDIO_PROCESSING',
-    sof/pipe-google-rtc-audio-processing-rtnr-capture.m4,
+    sof/pipe-rtnr-google-rtc-audio-processing-capture.m4,
     sof/pipe-rtnr-capture.m4),
     sof/pipe-passthrough-capture.m4),
 	3, 18, 2, s16le,

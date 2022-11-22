@@ -123,15 +123,14 @@ static int dai_trigger_op(struct dai *dai, int cmd, int direction)
 
 /* called from src/ipc/ipc3/handler.c and src/ipc/ipc4/dai.c */
 int dai_set_config(struct dai *dai, struct ipc_config_dai *common_config,
-		   void *spec_config)
+		   const void *spec_config)
 {
 	const struct device *dev = dai->dev;
-	struct sof_ipc_dai_config *sof_cfg;
+	const struct sof_ipc_dai_config *sof_cfg = spec_config;
 	struct dai_config cfg;
-	void *cfg_params;
+	const void *cfg_params;
 	bool is_blob;
 
-	sof_cfg = spec_config;
 	cfg.dai_index = common_config->dai_index;
 	is_blob = common_config->is_config_blob;
 	cfg.format = sof_cfg->format;
@@ -198,7 +197,12 @@ int dai_get_handshake(struct dai *dai, int direction, int stream_id)
 /* called from ipc/ipc3/dai.c and ipc/ipc4/dai.c */
 int dai_get_fifo_depth(struct dai *dai, int direction)
 {
-	const struct dai_properties *props = dai_get_properties(dai->dev, direction, 0);
+	const struct dai_properties *props;
+
+	if (!dai)
+		return 0;
+
+	props = dai_get_properties(dai->dev, direction, 0);
 
 	return props->fifo_depth;
 }
@@ -292,11 +296,11 @@ static void dai_dma_cb(void *arg, enum notify_id type, void *data)
 }
 
 static struct comp_dev *dai_new(const struct comp_driver *drv,
-				struct comp_ipc_config *config,
-				void *spec)
+				const struct comp_ipc_config *config,
+				const void *spec)
 {
 	struct comp_dev *dev;
-	struct ipc_config_dai *dai_cfg = spec;
+	const struct ipc_config_dai *dai_cfg = spec;
 	struct dai_data *dd;
 	uint32_t dir;
 
@@ -500,7 +504,7 @@ static int dai_playback_params(struct comp_dev *dev, uint32_t period_bytes,
 	if (!dma_cfg) {
 		comp_err(dev, "dai_playback_params(): dma_cfg allocation failed");
 		err = -ENOMEM;
-		goto out;
+		goto free;
 	}
 
 	dma_cfg->channel_direction = MEMORY_TO_PERIPHERAL;
@@ -526,7 +530,7 @@ static int dai_playback_params(struct comp_dev *dev, uint32_t period_bytes,
 		rfree(dma_cfg);
 		comp_err(dev, "dai_playback_params(): dma_block_config allocation failed");
 		err = -ENOMEM;
-		goto out;
+		goto free;
 	}
 
 	dma_cfg->head_block = dma_block_cfg;
@@ -542,6 +546,9 @@ static int dai_playback_params(struct comp_dev *dev, uint32_t period_bytes,
 		prev->next_block = dma_cfg->head_block;
 	dd->z_config = dma_cfg;
 
+free:
+	if (err < 0)
+		dma_sg_free(&config->elem_array);
 out:
 	buffer_release(dma_buf);
 
@@ -626,7 +633,7 @@ static int dai_capture_params(struct comp_dev *dev, uint32_t period_bytes,
 	if (!dma_cfg) {
 		comp_err(dev, "dai_playback_params(): dma_cfg allocation failed");
 		err = -ENOMEM;
-		goto out;
+		goto free;
 	}
 
 	dma_cfg->channel_direction = PERIPHERAL_TO_MEMORY;
@@ -652,7 +659,7 @@ static int dai_capture_params(struct comp_dev *dev, uint32_t period_bytes,
 		rfree(dma_cfg);
 		comp_err(dev, "dai_playback_params(): dma_block_config allocation failed");
 		err = -ENOMEM;
-		goto out;
+		goto free;
 	}
 
 	dma_cfg->head_block = dma_block_cfg;
@@ -668,6 +675,9 @@ static int dai_capture_params(struct comp_dev *dev, uint32_t period_bytes,
 		prev->next_block = dma_cfg->head_block;
 	dd->z_config = dma_cfg;
 
+free:
+	if (err < 0)
+		dma_sg_free(&config->elem_array);
 out:
 	buffer_release(dma_buf);
 
@@ -930,7 +940,9 @@ static int dai_reset(struct comp_dev *dev)
 		dai_dma_release(dev);
 
 	dma_sg_free(&config->elem_array);
+	rfree(dd->z_config->head_block);
 	rfree(dd->z_config);
+	dd->z_config = NULL;
 
 	if (dd->dma_buffer) {
 		buffer_free(dd->dma_buffer);
@@ -1003,6 +1015,11 @@ static int dai_comp_trigger_internal(struct comp_dev *dev, int cmd)
 		if (dd->xrun == 0) {
 			/* recover valid start position */
 			ret = dma_stop(dd->chan->dma->z_dev, dd->chan->index);
+			if (ret < 0)
+				return ret;
+
+			/* dma_config needed after stop */
+			ret = dma_config(dd->chan->dma->z_dev, dd->chan->index, dd->z_config);
 			if (ret < 0)
 				return ret;
 
@@ -1322,7 +1339,12 @@ static int dai_ts_stop_op(struct comp_dev *dev)
 
 uint32_t dai_get_init_delay_ms(struct dai *dai)
 {
-	const struct dai_properties *props = dai_get_properties(dai->dev, 0, 0);
+	const struct dai_properties *props;
+
+	if (!dai)
+		return 0;
+
+	props = dai_get_properties(dai->dev, 0, 0);
 
 	return props->reg_init_delay;
 }

@@ -640,12 +640,12 @@ static int host_trigger(struct comp_dev *dev, int cmd)
 }
 
 static struct comp_dev *host_new(const struct comp_driver *drv,
-				 struct comp_ipc_config *config,
-				 void *spec)
+				 const struct comp_ipc_config *config,
+				 const void *spec)
 {
 	struct comp_dev *dev;
 	struct host_data *hd;
-	struct ipc_config_host *ipc_host = spec;
+	const struct ipc_config_host *ipc_host = spec;
 	uint32_t dir;
 
 	comp_cl_dbg(&comp_host, "host_new()");
@@ -912,7 +912,7 @@ static int host_params(struct comp_dev *dev,
 	 */
 	channel = dma_request_channel(hd->dma->z_dev, &hda_chan);
 	if (channel < 0) {
-		comp_err(dev, "host_params(): hd->chan is NULL");
+		comp_err(dev, "host_params(): requested channel %d is busy", hda_chan);
 		err = -ENODEV;
 		goto out;
 	}

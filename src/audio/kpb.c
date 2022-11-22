@@ -38,6 +38,7 @@
 #include <rtos/string.h>
 #include <sof/ut.h>
 #include <ipc/topology.h>
+#include <ipc4/kpb.h>
 #include <user/kpb.h>
 #include <user/trace.h>
 #include <errno.h>
@@ -86,6 +87,9 @@ struct comp_data {
 				   * host?
 				   */
 	enum comp_copy_type force_copy_type; /**< should we force copy_type on kpb sink? */
+#ifdef CONFIG_IPC_MAJOR_4
+	struct ipc4_kpb_module_cfg ipc4_cfg;
+#endif /* CONFIG_IPC_MAJOR_4 */
 };
 
 /*! KPB private functions */
@@ -157,6 +161,227 @@ static void kpb_lock_init(struct comp_data *kpb)
 
 #endif /* __ZEPHYR__ */
 
+#if CONFIG_IPC_MAJOR_4
+/**
+ * \brief Set and verify ipc params.
+ * \param[in] dev - component device pointer.
+ * \param[in] ipc_config - ipc config pointer.
+ * \return: none.
+ */
+static int kpb_set_verify_ipc_params(struct comp_dev *dev,
+				     const struct ipc4_kpb_module_cfg *ipc_config)
+{
+	struct comp_data *kpb = comp_get_drvdata(dev);
+
+	kpb->config.channels = ipc_config->base_cfg.audio_fmt.channels_count;
+	kpb->config.sampling_freq =
+		ipc_config->base_cfg.audio_fmt.sampling_frequency;
+	kpb->config.sampling_width =
+		ipc_config->base_cfg.audio_fmt.valid_bit_depth;
+	kpb->ipc4_cfg.base_cfg = ipc_config->base_cfg;
+
+	/* Initialize sinks */
+	kpb->sel_sink = NULL;
+	kpb->host_sink = NULL;
+
+	if (!kpb_is_sample_width_supported(kpb->config.sampling_width)) {
+		comp_err(dev, "kpb_set_verify_ipc_params(): requested sampling width not supported");
+		return -EINVAL;
+	}
+
+	if (kpb->config.channels > KPB_MAX_SUPPORTED_CHANNELS) {
+		comp_err(dev, "kpb_set_verify_ipc_params(): no of channels exceeded the limit");
+		return -EINVAL;
+	}
+
+	if (kpb->config.sampling_freq != KPB_SAMPLNG_FREQUENCY) {
+		comp_err(dev, "kpb_set_verify_ipc_params(): requested sampling frequency not supported");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+/**
+ * \brief Set KPB component stream params.
+ * \param[in] dev - component device pointer.
+ * \param[in] params - sof ipc stream params pointer.
+ * \return: none.
+ */
+static void kpb_set_params(struct comp_dev *dev,
+			   struct sof_ipc_stream_params *params)
+{
+	struct comp_data *kpb = comp_get_drvdata(dev);
+	uint32_t __sparse_cache valid_fmt, frame_fmt;
+
+	comp_dbg(dev, "kpb_set_params()");
+
+	memset_s(params, sizeof(*params), 0, sizeof(*params));
+	params->channels = kpb->ipc4_cfg.base_cfg.audio_fmt.channels_count;
+	params->rate = kpb->ipc4_cfg.base_cfg.audio_fmt.sampling_frequency;
+	params->sample_container_bytes = kpb->ipc4_cfg.base_cfg.audio_fmt.depth / 8;
+	params->sample_valid_bytes =
+		kpb->ipc4_cfg.base_cfg.audio_fmt.valid_bit_depth / 8;
+	params->buffer_fmt = kpb->ipc4_cfg.base_cfg.audio_fmt.interleaving_style;
+	params->buffer.size = kpb->ipc4_cfg.base_cfg.obs * KPB_MAX_BUFF_TIME * 2;
+
+	params->host_period_bytes = params->channels *
+				    params->sample_container_bytes *
+				    (params->rate / 1000);
+
+	audio_stream_fmt_conversion(kpb->ipc4_cfg.base_cfg.audio_fmt.depth,
+				    kpb->ipc4_cfg.base_cfg.audio_fmt.valid_bit_depth,
+				    &frame_fmt, &valid_fmt,
+				    kpb->ipc4_cfg.base_cfg.audio_fmt.s_type);
+
+	params->frame_fmt = frame_fmt;
+}
+
+/**
+ * \brief Set KPB component stream params.
+ * \param[in] dev - component device pointer.
+ * \param[in] type - sof ipc stream params pointer.
+ * \param[in] value - ipc4 base module config pointer.
+ * \return: none.
+ */
+static int kpb_get_attribute(struct comp_dev *dev,
+			     uint32_t type,
+			     void *value)
+{
+	struct comp_data *kpb = comp_get_drvdata(dev);
+
+	switch (type) {
+	case COMP_ATTR_BASE_CONFIG:
+		*(struct ipc4_base_module_cfg *)value = kpb->ipc4_cfg.base_cfg;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+/**
+ * \brief Initialize KPB sinks when binding.
+ * \param[in] dev - component device pointer.
+ * \param[in] data - ipc4 bind/unbind data.
+ * \return: none.
+ */
+static int kpb_bind(struct comp_dev *dev, void *data)
+{
+	struct comp_data *kpb = comp_get_drvdata(dev);
+	struct ipc4_module_bind_unbind *bu;
+	struct list_item *blist;
+	int buf_id;
+	int ret = 0;
+
+	comp_dbg(dev, "kpb_bind()");
+
+	bu = (struct ipc4_module_bind_unbind *)data;
+	buf_id = IPC4_COMP_ID(bu->extension.r.src_queue, bu->extension.r.dst_queue);
+
+	/* We're assuming here that KPB Real Time sink (kpb->sel_sink) is
+	 * always connected to input pin of Detector pipeline so during IPC4
+	 * Bind operation both src_queue and dst_queue will have id = 0
+	 * (Detector/MicSel has one input pin). To properly connect KPB sink
+	 * with Detector source we're looking for buffer with id=0.
+	 */
+
+	list_for_item(blist, &dev->bsink_list) {
+		struct comp_buffer *sink = container_of(blist, struct comp_buffer, source_list);
+		struct comp_buffer __sparse_cache *sink_c = buffer_acquire(sink);
+		int sink_buf_id;
+
+		if (!sink_c->sink) {
+			ret = -EINVAL;
+			buffer_release(sink_c);
+			break;
+		}
+
+		sink_buf_id = sink_c->id;
+		buffer_release(sink_c);
+
+		if (sink_buf_id == buf_id) {
+			if (sink_buf_id == 0)
+				kpb->sel_sink = sink;
+			else
+				kpb->host_sink = sink;
+		}
+	}
+
+	return ret;
+}
+
+/**
+ * \brief Reset KPB sinks when unbinding.
+ * \param[in] dev - component device pointer.
+ * \param[in] data - ipc4 bind/unbind data.
+ * \return: none.
+ */
+static int kpb_unbind(struct comp_dev *dev, void *data)
+{
+	struct comp_data *kpb = comp_get_drvdata(dev);
+	struct ipc4_module_bind_unbind *bu;
+	int buf_id;
+
+	comp_dbg(dev, "kpb_bind()");
+
+	bu = (struct ipc4_module_bind_unbind *)data;
+	buf_id = IPC4_COMP_ID(bu->extension.r.src_queue, bu->extension.r.dst_queue);
+
+	/* Reset sinks when unbinding */
+	if (buf_id == 0)
+		kpb->sel_sink = NULL;
+	else
+		kpb->host_sink = NULL;
+
+	return 0;
+}
+
+#else /* CONFIG_IPC_MAJOR_4 */
+/**
+ * \brief Set and verify ipc params.
+ * \param[in] dev - component device pointer.
+ * \param[in] ipc_config - ipc config pointer type.
+ * \return: none.
+ */
+static int kpb_set_verify_ipc_params(struct comp_dev *dev,
+				     const struct ipc_config_process *ipc_config)
+{
+	struct comp_data *kpb = comp_get_drvdata(dev);
+	int ret;
+
+	ret = memcpy_s(&kpb->config, sizeof(kpb->config), ipc_config->data,
+		       ipc_config->size);
+	assert(!ret);
+
+	/* Initialize sinks */
+	kpb->sel_sink = NULL;
+	kpb->host_sink = NULL;
+
+	if (!kpb_is_sample_width_supported(kpb->config.sampling_width)) {
+		comp_err(dev, "kpb_set_verify_ipc_params(): requested sampling width not supported");
+		return -EINVAL;
+	}
+
+	if (kpb->config.channels > KPB_MAX_SUPPORTED_CHANNELS) {
+		comp_err(dev, "kpb_set_verify_ipc_params(): no of channels exceeded the limit");
+		return -EINVAL;
+	}
+
+	if (kpb->config.sampling_freq != KPB_SAMPLNG_FREQUENCY) {
+		comp_err(dev, "kpb_set_verify_ipc_params(): requested sampling frequency not supported");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static void kpb_set_params(struct comp_dev *dev,
+			   struct sof_ipc_stream_params *params)
+{}
+#endif /* CONFIG_IPC_MAJOR_4 */
+
 /*
  * \brief Create a key phrase buffer component.
  * \param[in] config - generic ipc component pointer.
@@ -164,14 +389,23 @@ static void kpb_lock_init(struct comp_data *kpb)
  * \return: a pointer to newly created KPB component.
  */
 static struct comp_dev *kpb_new(const struct comp_driver *drv,
-				struct comp_ipc_config *config,
-				void *spec)
+				const struct comp_ipc_config *config,
+				const void *spec)
 {
-	struct ipc_config_process *ipc_process = spec;
+#if CONFIG_IPC_MAJOR_4
+	const struct ipc4_kpb_module_cfg *ipc_process = spec;
+	size_t ipc_config_size = sizeof(*ipc_process);
+	size_t kpb_config_size = sizeof(struct ipc4_kpb_module_cfg);
+#else
+	const struct ipc_config_process *ipc_process = spec;
+	size_t ipc_config_size = ipc_process->size;
+	size_t kpb_config_size = sizeof(struct sof_kpb_config);
+#endif
 	struct task_ops ops = {
 		.run = kpb_draining_task,
 		.get_deadline = kpb_task_deadline,
 	};
+
 	struct comp_dev *dev;
 	struct comp_data *kpb;
 	int ret;
@@ -179,9 +413,9 @@ static struct comp_dev *kpb_new(const struct comp_driver *drv,
 	comp_cl_info(&comp_kpb, "kpb_new()");
 
 	/* make sure data size is not bigger than config space */
-	if (ipc_process->size > sizeof(struct sof_kpb_config)) {
-		comp_cl_err(&comp_kpb, "kpb_new(): data size %u too big",
-			    ipc_process->size);
+	if (ipc_config_size > kpb_config_size) {
+		comp_cl_err(&comp_kpb, "kpb_new(): ipc config size %u too big",
+			    ipc_config_size);
 		return NULL;
 	}
 
@@ -198,24 +432,8 @@ static struct comp_dev *kpb_new(const struct comp_driver *drv,
 
 	comp_set_drvdata(dev, kpb);
 
-	ret = memcpy_s(&kpb->config, sizeof(kpb->config), ipc_process->data,
-		       ipc_process->size);
-	assert(!ret);
-
-	if (!kpb_is_sample_width_supported(kpb->config.sampling_width)) {
-		comp_err(dev, "kpb_new(): requested sampling width not supported");
-		rfree(dev);
-		return NULL;
-	}
-
-	if (kpb->config.channels > KPB_MAX_SUPPORTED_CHANNELS) {
-		comp_err(dev, "kpb_new(): no of channels exceeded the limit");
-		rfree(dev);
-		return NULL;
-	}
-
-	if (kpb->config.sampling_freq != KPB_SAMPLNG_FREQUENCY) {
-		comp_err(dev, "kpb_new(): requested sampling frequency not supported");
+	ret = kpb_set_verify_ipc_params(dev, ipc_process);
+	if (ret) {
 		rfree(dev);
 		return NULL;
 	}
@@ -457,6 +675,8 @@ static int kpb_params(struct comp_dev *dev,
 		return PPL_STATUS_PATH_STOP;
 	}
 
+	kpb_set_params(dev, params);
+
 	err = kbp_verify_params(dev, params);
 	if (err < 0) {
 		comp_err(dev, "kpb_params(): pcm params verification failed");
@@ -483,10 +703,9 @@ static int kpb_prepare(struct comp_dev *dev)
 	struct comp_data *kpb = comp_get_drvdata(dev);
 	int ret = 0;
 	int i;
-	struct list_item *blist;
 	size_t hb_size_req = KPB_MAX_BUFFER_SIZE(kpb->config.sampling_width);
 
-	comp_info(dev, "kpb_prepare()");
+	comp_dbg(dev, "kpb_prepare()");
 
 	if (kpb->state == KPB_STATE_RESETTING ||
 	    kpb->state == KPB_STATE_RESET_FINISHING) {
@@ -512,8 +731,6 @@ static int kpb_prepare(struct comp_dev *dev)
 	/* Init private data */
 	kpb->kpb_no_of_clients = 0;
 	kpb->hd.buffered = 0;
-	kpb->sel_sink = NULL;
-	kpb->host_sink = NULL;
 
 	if (kpb->hd.c_hb && kpb->hd.buffer_size < hb_size_req) {
 		/* Host params has changed, we need to allocate new buffer */
@@ -554,10 +771,13 @@ static int kpb_prepare(struct comp_dev *dev)
 		return -ENOMEM;
 	}
 
+#ifndef CONFIG_IPC_MAJOR_4
 	/* Search for KPB related sinks.
 	 * NOTE! We assume here that channel selector component device
 	 * is connected to the KPB sinks as well as host device.
 	 */
+	struct list_item *blist;
+
 	list_for_item(blist, &dev->bsink_list) {
 		struct comp_buffer *sink = container_of(blist, struct comp_buffer, source_list);
 		struct comp_buffer __sparse_cache *sink_c = buffer_acquire(sink);
@@ -585,6 +805,7 @@ static int kpb_prepare(struct comp_dev *dev)
 			break;
 		}
 	}
+#endif /* CONFIG_IPC_MAJOR_4 */
 
 	if (!kpb->sel_sink || !kpb->host_sink) {
 		comp_info(dev, "kpb_prepare(): could not find sinks: sel_sink %p host_sink %p",
@@ -1638,14 +1859,19 @@ static const struct comp_driver comp_kpb = {
 	.uid = SOF_RT_UUID(kpb_uuid),
 	.tctx = &kpb_tr,
 	.ops = {
-		.create = kpb_new,
-		.free = kpb_free,
-		.cmd = kpb_cmd,
-		.trigger = kpb_trigger,
-		.copy = kpb_copy,
-		.prepare = kpb_prepare,
-		.reset = kpb_reset,
-		.params = kpb_params,
+		.create		= kpb_new,
+		.free		= kpb_free,
+		.cmd		= kpb_cmd,
+		.trigger	= kpb_trigger,
+		.copy		= kpb_copy,
+		.prepare	= kpb_prepare,
+		.reset		= kpb_reset,
+		.params		= kpb_params,
+#ifdef CONFIG_IPC_MAJOR_4
+		.get_attribute	= kpb_get_attribute,
+		.bind		= kpb_bind,
+		.unbind		= kpb_unbind,
+#endif /* CONFIG_IPC_MAJOR_4 */
 	},
 };
 
