@@ -96,11 +96,16 @@ enum dma_irq_cmd {
 #define DMA_CHAN_INVALID	0xFFFFFFFF
 #define DMA_CORE_INVALID	0xFFFFFFFF
 
+/* Attributes have been ported to Zephyr. This condition is necessary until full support of
+ * CONFIG_SOF_ZEPHYR_STRICT_HEADERS.
+ */
+#ifndef CONFIG_ZEPHYR_NATIVE_DRIVERS
 /* DMA attributes */
 #define DMA_ATTR_BUFFER_ALIGNMENT		0
 #define DMA_ATTR_COPY_ALIGNMENT			1
 #define DMA_ATTR_BUFFER_ADDRESS_ALIGNMENT	2
 #define DMA_ATTR_BUFFER_PERIOD_COUNT		3
+#endif
 
 struct dma;
 
@@ -200,6 +205,9 @@ struct dma_plat_data {
 	const char *irq_name;
 	uint32_t chan_size;
 	const void *drv_plat_data;
+#ifdef __ZEPHYR__
+	uint32_t period_count;
+#endif
 };
 
 struct dma {
@@ -393,8 +401,8 @@ static inline int dma_get_data_size_legacy(struct dma_chan_data *channel,
 	return channel->dma->ops->get_data_size(channel, avail, free);
 }
 
-static inline int dma_get_attribute(struct dma *dma, uint32_t type,
-				    uint32_t *value)
+static inline int dma_get_attribute_legacy(struct dma *dma, uint32_t type,
+					   uint32_t *value)
 {
 	return dma->ops->get_attribute(dma, type, value);
 }

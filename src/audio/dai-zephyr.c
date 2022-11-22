@@ -739,7 +739,7 @@ static int dai_params(struct comp_dev *dev, struct sof_ipc_stream_params *params
 		return -EINVAL;
 	}
 
-	err = dma_get_attribute(dd->dma, DMA_ATTR_BUFFER_ADDRESS_ALIGNMENT,
+	err = dma_get_attribute(dd->dma->z_dev, DMA_ATTR_BUFFER_ADDRESS_ALIGNMENT,
 				&addr_align);
 	if (err < 0) {
 		comp_err(dev, "dai_params(): could not get dma buffer address alignment, err = %d",
@@ -747,18 +747,16 @@ static int dai_params(struct comp_dev *dev, struct sof_ipc_stream_params *params
 		return err;
 	}
 
-	err = dma_get_attribute(dd->dma, DMA_ATTR_BUFFER_ALIGNMENT, &align);
+	err = dma_get_attribute(dd->dma->z_dev, DMA_ATTR_BUFFER_SIZE_ALIGNMENT, &align);
 	if (err < 0 || !align) {
 		comp_err(dev, "dai_params(): no valid dma buffer alignment, err = %d, align = %u",
 			 err, align);
 		return -EINVAL;
 	}
 
-	err = dma_get_attribute(dd->dma, DMA_ATTR_BUFFER_PERIOD_COUNT,
-				&period_count);
-	if (err < 0 || !period_count) {
-		comp_err(dev, "dai_params(): no valid dma buffer period count, err = %d, period_count = %u",
-			 err, period_count);
+	period_count = dd->dma->plat_data.period_count;
+	if (!period_count) {
+		comp_err(dev, "dai_params(): no valid dma buffer period count");
 		return -EINVAL;
 	}
 

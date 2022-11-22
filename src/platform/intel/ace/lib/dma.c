@@ -17,70 +17,8 @@
 #include <rtos/spinlock.h>
 #include <zephyr/device.h>
 
-#define DW_DMA_BUFFER_ALIGNMENT		0x4
-#define DW_DMA_COPY_ALIGNMENT		0x4
 #define DW_DMA_BUFFER_PERIOD_COUNT	0x4
-
-static int dw_dma_get_attribute(struct dma *dma, uint32_t type,
-				uint32_t *value)
-{
-	int ret = 0;
-
-	switch (type) {
-	case DMA_ATTR_BUFFER_ALIGNMENT:
-		*value = DW_DMA_BUFFER_ALIGNMENT;
-		break;
-	case DMA_ATTR_COPY_ALIGNMENT:
-		*value = DW_DMA_COPY_ALIGNMENT;
-		break;
-	case DMA_ATTR_BUFFER_ADDRESS_ALIGNMENT:
-		*value = PLATFORM_DCACHE_ALIGN;
-		break;
-	case DMA_ATTR_BUFFER_PERIOD_COUNT:
-		*value = DW_DMA_BUFFER_PERIOD_COUNT;
-		break;
-	default:
-		ret = -EINVAL;
-		break;
-	}
-
-	return ret;
-}
-
-const struct dma_ops dw_dma_ops = {
-	.get_attribute		= dw_dma_get_attribute,
-};
-
-#define HDA_DMA_BUFFER_ALIGNMENT		0x20
-#define HDA_DMA_COPY_ALIGNMENT			0x20
-#define HDA_DMA_BUFFER_ADDRESS_ALIGNMENT	0x80
-#define HDA_DMA_BUFFER_PERIOD_COUNT		2
-
-static int hda_dma_get_attribute(struct dma *dma, uint32_t type, uint32_t *value)
-{
-	switch (type) {
-	case DMA_ATTR_BUFFER_ALIGNMENT:
-		*value = HDA_DMA_BUFFER_ALIGNMENT;
-		break;
-	case DMA_ATTR_COPY_ALIGNMENT:
-		*value = HDA_DMA_COPY_ALIGNMENT;
-		break;
-	case DMA_ATTR_BUFFER_ADDRESS_ALIGNMENT:
-		*value = HDA_DMA_BUFFER_ADDRESS_ALIGNMENT;
-		break;
-	case DMA_ATTR_BUFFER_PERIOD_COUNT:
-		*value = HDA_DMA_BUFFER_PERIOD_COUNT;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-const struct dma_ops hda_dma_ops = {
-	.get_attribute		= hda_dma_get_attribute,
-};
+#define HDA_DMA_BUFFER_PERIOD_COUNT	2
 
 SHARED_DATA struct dma dma[] = {
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(lpgpdma0), okay)
@@ -92,8 +30,8 @@ SHARED_DATA struct dma dma[] = {
 		.devs		= DMA_DEV_SSP | DMA_DEV_DMIC |
 				  DMA_DEV_ALH,
 		.channels	= 8,
+		.period_count	= DW_DMA_BUFFER_PERIOD_COUNT,
 	},
-	.ops		= &dw_dma_ops,
 	.z_dev		= DEVICE_DT_GET(DT_NODELABEL(lpgpdma0)),
 },
 #endif
@@ -106,8 +44,8 @@ SHARED_DATA struct dma dma[] = {
 		.devs		= DMA_DEV_SSP | DMA_DEV_DMIC |
 				  DMA_DEV_ALH,
 		.channels	= 8,
+		.period_count	= DW_DMA_BUFFER_PERIOD_COUNT,
 	},
-	.ops		= &dw_dma_ops,
 	.z_dev		= DEVICE_DT_GET(DT_NODELABEL(lpgpdma1)),
 },
 #endif
@@ -118,8 +56,8 @@ SHARED_DATA struct dma dma[] = {
 		.caps		= DMA_CAP_HDA,
 		.devs		= DMA_DEV_HOST,
 		.channels	= DT_PROP(DT_NODELABEL(hda_host_in), dma_channels),
+		.period_count	= HDA_DMA_BUFFER_PERIOD_COUNT,
 	},
-	.ops		= &hda_dma_ops,
 	.z_dev		= DEVICE_DT_GET(DT_NODELABEL(hda_host_in)),
 },
 #endif
@@ -130,8 +68,8 @@ SHARED_DATA struct dma dma[] = {
 		.caps		= DMA_CAP_HDA,
 		.devs		= DMA_DEV_HOST,
 		.channels	= DT_PROP(DT_NODELABEL(hda_host_out), dma_channels),
+		.period_count	= HDA_DMA_BUFFER_PERIOD_COUNT,
 	},
-	.ops		= &hda_dma_ops,
 	.z_dev		= DEVICE_DT_GET(DT_NODELABEL(hda_host_out)),
 },
 #endif
@@ -142,8 +80,8 @@ SHARED_DATA struct dma dma[] = {
 		.caps		= DMA_CAP_HDA,
 		.devs		= DMA_DEV_HDA,
 		.channels	= DT_PROP(DT_NODELABEL(hda_link_in), dma_channels),
+		.period_count	= HDA_DMA_BUFFER_PERIOD_COUNT,
 	},
-	.ops		= &hda_dma_ops,
 	.z_dev		= DEVICE_DT_GET(DT_NODELABEL(hda_link_in)),
 },
 #endif
@@ -154,8 +92,8 @@ SHARED_DATA struct dma dma[] = {
 		.caps		= DMA_CAP_HDA,
 		.devs		= DMA_DEV_HDA,
 		.channels	= DT_PROP(DT_NODELABEL(hda_link_out), dma_channels),
+		.period_count	= HDA_DMA_BUFFER_PERIOD_COUNT,
 	},
-	.ops		= &hda_dma_ops,
 	.z_dev		= DEVICE_DT_GET(DT_NODELABEL(hda_link_out)),
 },
 #endif
