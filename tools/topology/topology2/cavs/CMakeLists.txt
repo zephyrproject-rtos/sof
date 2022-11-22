@@ -3,23 +3,24 @@
 # Array of "input-file-name;output-file-name;comma separated pre-processor variables"
 set(TPLGS
 # CAVS HDMI only topology with passthrough pipelines
-"cavs-passthrough-hdmi\;cavs-passthrough-hdmi"
+"cavs-passthrough-hdmi\;cavs-passthrough-hdmi\;USE_CHAIN_DMA=true"
 # CAVS HDA topology with mixer-based pipelines for HDA and passthrough pipelines for HDMI
-"cavs-passthrough-hdmi\;cavs-mixin-mixout-hda\;HDA_CONFIG=mix"
+"cavs-passthrough-hdmi\;cavs-mixin-mixout-hda\;HDA_CONFIG=mix,USE_CHAIN_DMA=true"
 # If the alsatplg plugins for NHLT are not available, the NHLT blobs will not be added to the
 # topologies below.
 # CNL: CAVS HDA topology with mixer-based pipelines for HDA and passthrough pipelines for HDMI
 "cavs-passthrough-hdmi\;cavs-mixin-mixout-hda-2ch-cnl\;\
-HDA_CONFIG=mix,NUM_DMICS=2,PLATFORM=cnl,PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt.bin"
+HDA_CONFIG=mix,NUM_DMICS=2,PLATFORM=cnl,PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt.bin,\
+USE_CHAIN_DMA=true"
 "cavs-passthrough-hdmi\;cavs-mixin-mixout-hda-4ch-cnl\;\
 HDA_CONFIG=mix,NUM_DMICS=4,PLATFORM=cnl,PDM1_MIC_A_ENABLE=1,PDM1_MIC_B_ENABLE=1,\
-PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt.bin"
+PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt.bin,USE_CHAIN_DMA=true"
 # TGL: CAVS HDA topology with mixer-based pipelines for HDA and passthrough pipelines for HDMI
 "cavs-passthrough-hdmi\;cavs-mixin-mixout-hda-2ch-tgl\;\
-HDA_CONFIG=mix,NUM_DMICS=2,PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt.bin"
+HDA_CONFIG=mix,NUM_DMICS=2,PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt.bin,USE_CHAIN_DMA=true"
 "cavs-passthrough-hdmi\;cavs-mixin-mixout-hda-4ch-tgl\;\
 HDA_CONFIG=mix,NUM_DMICS=4,PLATFORM=cnl,PDM1_MIC_A_ENABLE=1,PDM1_MIC_B_ENABLE=1,\
-PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt.bin"
+PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt.bin,USE_CHAIN_DMA=true"
 # MTL: CAVS HDA topology with mixer-based pipelines for HDA and passthrough pipelines for HDMI
 "cavs-passthrough-hdmi\;cavs-mixin-mixout-hda-4ch-mtl\;PLATFORM=mtl,\
 HDA_CONFIG=mix,NUM_DMICS=4,PDM1_MIC_A_ENABLE=1,PDM1_MIC_B_ENABLE=1,PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt-mtl-hda-mix.bin"
@@ -46,9 +47,12 @@ PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt-ace-mtl-nocodec.bin"
 )
 
 # generate ABI for IPC4
-execute_process(
-	COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/../get_abi.sh ${SOF_ROOT_SOURCE_DIRECTORY} "ipc4"
-	OUTPUT_FILE ${CMAKE_CURRENT_BINARY_DIR}/abi.conf
+add_custom_command(OUTPUT abi.conf
+	COMMAND > abi.conf  ${CMAKE_CURRENT_SOURCE_DIR}/../get_abi.sh ${SOF_ROOT_SOURCE_DIRECTORY} "ipc4"
+	DEPENDS ${SOF_ROOT_SOURCE_DIRECTORY}/src/include/kernel/abi.h
+)
+add_custom_target(cavs_abi_target
+	DEPENDS abi.conf
 )
 
 add_custom_target(topology2_cavs)
@@ -68,15 +72,9 @@ foreach(tplg ${TPLGS})
 		list(GET tplg ${last_index} defines)
 	endif()
 
-	# copy ABI and input conf file contents
-	#
-	# BUG: move this from CMake configuration time to build time to
-	# fix incremental builds
-	configure_file(${CMAKE_CURRENT_BINARY_DIR}/abi.conf ${CMAKE_CURRENT_BINARY_DIR}/${output}.conf)
-	file(READ ${CMAKE_CURRENT_SOURCE_DIR}/${input}.conf CONTENTS)
-	file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/${output}.conf "${CONTENTS}")
-
-	add_alsatplg2_command("${output}.conf" "${output}.tplg" "${CMAKE_CURRENT_SOURCE_DIR}" "${defines}")
+	add_alsatplg2_command("${CMAKE_CURRENT_BINARY_DIR}/abi.conf" cavs_abi_target
+	  "${CMAKE_CURRENT_SOURCE_DIR}/${input}" "${output}"
+	  "${CMAKE_CURRENT_SOURCE_DIR}" "${defines}")
 	add_custom_target(topology2_${output} DEPENDS ${output}.tplg)
 	add_dependencies(topology2_cavs topology2_${output})
 endforeach()

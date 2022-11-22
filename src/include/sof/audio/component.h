@@ -165,13 +165,24 @@ enum {
 #define comp_cl_dbg(drv_p, __e, ...) LOG_DBG(__e, ##__VA_ARGS__)
 
 /* device level tracing */
-#define comp_err(comp_p, __e, ...) LOG_ERR(__e, ##__VA_ARGS__)
 
-#define comp_warn(comp_p, __e, ...) LOG_WRN(__e, ##__VA_ARGS__)
+#if CONFIG_IPC_MAJOR_4
+#define __COMP_FMT "comp:%u %#x "
+#else
+#define __COMP_FMT "comp:%u.%u "
+#endif
 
-#define comp_info(comp_p, __e, ...) LOG_INF(__e, ##__VA_ARGS__)
+#define comp_err(comp_p, __e, ...) LOG_ERR(__COMP_FMT __e, trace_comp_get_id(comp_p), \
+					   trace_comp_get_subid(comp_p), ##__VA_ARGS__)
 
-#define comp_dbg(comp_p, __e, ...) LOG_DBG(__e, ##__VA_ARGS__)
+#define comp_warn(comp_p, __e, ...) LOG_WRN(__COMP_FMT __e, trace_comp_get_id(comp_p), \
+					    trace_comp_get_subid(comp_p), ##__VA_ARGS__)
+
+#define comp_info(comp_p, __e, ...) LOG_INF(__COMP_FMT __e, trace_comp_get_id(comp_p), \
+					    trace_comp_get_subid(comp_p), ##__VA_ARGS__)
+
+#define comp_dbg(comp_p, __e, ...) LOG_DBG(__COMP_FMT __e, trace_comp_get_id(comp_p), \
+					   trace_comp_get_subid(comp_p), ##__VA_ARGS__)
 
 #else
 /* class (driver) level (no device object) tracing */
@@ -238,7 +249,9 @@ enum {
 		  (uint32_t)((pcd)->cpu_delta_peak))
 
 #define comp_perf_avg_info(pcd, comp_p)					\
-	comp_info(comp_p, "perf comp_copy cpu avg %u (current peak %u)",\
+	comp_info(comp_p, "perf comp_copy samples %u period %u cpu avg %u peak %u",\
+		  (uint32_t)((comp_p)->frames),            \
+		  (uint32_t)((comp_p)->period),			    \
 		  (uint32_t)((pcd)->cpu_delta_sum),			\
 		  (uint32_t)((pcd)->cpu_delta_peak))
 
@@ -291,8 +304,8 @@ struct comp_ops {
 	 * All parameters should be initialized to their default values.
 	 */
 	struct comp_dev *(*create)(const struct comp_driver *drv,
-				   struct comp_ipc_config *ipc_config,
-				   void *ipc_specific_config);
+				   const struct comp_ipc_config *ipc_config,
+				   const void *ipc_specific_config);
 
 	/**
 	 * Called to delete the specified component device.
@@ -335,7 +348,7 @@ struct comp_ops {
 	 * Mandatory for components that allocate DAI.
 	 */
 	int (*dai_config)(struct comp_dev *dev, struct ipc_config_dai *dai_config,
-			  void *dai_spec_config);
+			  const void *dai_spec_config);
 
 	/**
 	 * Used to pass standard and bespoke commands (with optional data).
@@ -493,7 +506,7 @@ struct comp_ops {
 				bool first_block,
 				bool last_block,
 				uint32_t data_offset,
-				char *data);
+				const char *data);
 
 	/**
 	 * Returns total data processed in number bytes.

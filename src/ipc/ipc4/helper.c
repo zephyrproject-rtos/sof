@@ -71,7 +71,6 @@ struct comp_dev *comp_new(struct sof_ipc_comp *comp)
 	struct comp_ipc_config ipc_config;
 	const struct comp_driver *drv;
 	struct comp_dev *dev;
-	struct ipc_config_process spec;
 
 	drv = ipc4_get_comp_drv(IPC4_MOD_ID(comp->id));
 	if (!drv)
@@ -92,16 +91,18 @@ struct comp_dev *comp_new(struct sof_ipc_comp *comp)
 	ipc_config.pipeline_id = comp->pipeline_id;
 	ipc_config.core = comp->core;
 
-	dcache_invalidate_region((__sparse_force void __sparse_cache *)(MAILBOX_HOSTBOX_BASE),
+	dcache_invalidate_region((__sparse_force void __sparse_cache *)MAILBOX_HOSTBOX_BASE,
 				 MAILBOX_HOSTBOX_SIZE);
 
 	if (drv->type == SOF_COMP_MODULE_ADAPTER) {
-		spec.data = (unsigned char *)MAILBOX_HOSTBOX_BASE;
-		/* spec_size in IPC4 is in DW. Convert to bytes. */
-		spec.size = comp->ext_data_length * 4;
-		dev = drv->ops.create(drv, &ipc_config, (void *)&spec);
+		const struct ipc_config_process spec = {
+			.data = (const unsigned char *)MAILBOX_HOSTBOX_BASE,
+			/* spec_size in IPC4 is in DW. Convert to bytes. */
+			.size = comp->ext_data_length * 4,
+		};
+		dev = drv->ops.create(drv, &ipc_config, (const void *)&spec);
 	} else {
-		dev = drv->ops.create(drv, &ipc_config, (void *)MAILBOX_HOSTBOX_BASE);
+		dev = drv->ops.create(drv, &ipc_config, (const void *)MAILBOX_HOSTBOX_BASE);
 	}
 	if (!dev)
 		return NULL;
@@ -182,18 +183,39 @@ static int ipc_pipeline_module_free(uint32_t pipeline_id)
 
 	icd = ipc_get_comp_by_ppl_id(ipc, COMP_TYPE_COMPONENT, pipeline_id);
 	while (icd) {
-		struct comp_buffer *sink;
-		struct list_item *sink_list;
-		struct list_item *tmp_list;
+		struct list_item *list, *_list;
+		struct comp_buffer *buffer;
 
 		/* free sink buffer allocated by current component in bind function */
-		list_for_item_safe(sink_list, tmp_list, &icd->cd->bsink_list) {
-			sink = container_of(sink_list, struct comp_buffer, source_list);
+		list_for_item_safe(list, _list, &icd->cd->bsink_list) {
+			struct comp_buffer __sparse_cache *buffer_c;
+			struct comp_dev *sink;
 
-			pipeline_disconnect(icd->cd, sink, PPL_CONN_DIR_COMP_TO_BUFFER);
-			pipeline_disconnect(icd->cd, sink, PPL_CONN_DIR_BUFFER_TO_COMP);
+			buffer = container_of(list, struct comp_buffer, source_list);
+			pipeline_disconnect(icd->cd, buffer, PPL_CONN_DIR_COMP_TO_BUFFER);
+			buffer_c = buffer_acquire(buffer);
+			sink = buffer_c->sink;
+			buffer_release(buffer_c);
 
-			buffer_free(sink);
+			/* free the buffer only when the sink module has also been disconnected */
+			if (!sink)
+				buffer_free(buffer);
+		}
+
+		/* free source buffer allocated by current component in bind function */
+		list_for_item_safe(list, _list, &icd->cd->bsource_list) {
+			struct comp_buffer __sparse_cache *buffer_c;
+			struct comp_dev *source;
+
+			buffer = container_of(list, struct comp_buffer, sink_list);
+			pipeline_disconnect(icd->cd, buffer, PPL_CONN_DIR_BUFFER_TO_COMP);
+			buffer_c = buffer_acquire(buffer);
+			source = buffer_c->source;
+			buffer_release(buffer_c);
+
+			/* free the buffer only when the source module has also been disconnected */
+			if (!source)
+				buffer_free(buffer);
 		}
 
 		ret = ipc_comp_free(ipc, icd->id);
@@ -246,12 +268,11 @@ int ipc_pipeline_free(struct ipc *ipc, uint32_t comp_id)
 static struct comp_buffer *ipc4_create_buffer(struct comp_dev *src, struct comp_dev *sink,
 					      uint32_t src_queue, uint32_t dst_queue)
 {
-	const struct comp_driver *drv = src->drv;
 	struct ipc4_base_module_cfg src_cfg;
 	struct sof_ipc_buffer ipc_buf;
 	int buf_size, ret;
 
-	ret = drv->ops.get_attribute(src, COMP_ATTR_BASE_CONFIG, &src_cfg);
+	ret = comp_get_attribute(src, COMP_ATTR_BASE_CONFIG, &src_cfg);
 	if (ret < 0) {
 		tr_err(&ipc_tr, "failed to get base config for src %#x", dev_comp_id(src));
 		return NULL;
@@ -317,6 +338,22 @@ int ipc_comp_connect(struct ipc *ipc, ipc_pipe_comp_connect *_connect)
 	if (ret < 0)
 		return IPC4_INVALID_RESOURCE_ID;
 
+	/* update direction for sink component if it is not set already */
+	if (!sink->direction_set && source->direction_set) {
+		sink->direction = source->direction;
+		sink->direction_set = true;
+	}
+
+	/* update direction for source component if it is not set already */
+	if (!source->direction_set && sink->direction_set) {
+		source->direction = sink->direction;
+		source->direction_set = true;
+	}
+
+	/* both sink and source components should have their direction set during module binding */
+	if (!sink->direction_set || !source->direction_set)
+		return IPC4_INVALID_RESOURCE_STATE;
+
 	return IPC4_SUCCESS;
 
 err:
@@ -324,8 +361,8 @@ err:
 	return IPC4_INVALID_RESOURCE_STATE;
 }
 
-/* when both module instances are parts of the same pipeline Unbind IPC would
- * be ignored by FW since FW does not support changing internal topology of pipeline
+/* when both module instances are part of the same pipeline Unbind IPC would
+ * be ignored since FW does not support changing internal topology of pipeline
  * during run-time. The only way to change pipeline topology is to delete the whole
  * pipeline and create it in modified form.
  */
@@ -336,7 +373,6 @@ int ipc_comp_disconnect(struct ipc *ipc, ipc_pipe_comp_connect *_connect)
 	struct comp_dev *src, *sink;
 	struct list_item *sink_list;
 	uint32_t src_id, sink_id, buffer_id;
-	uint32_t flags;
 	int ret;
 
 	bu = (struct ipc4_module_bind_unbind *)_connect;
@@ -371,10 +407,8 @@ int ipc_comp_disconnect(struct ipc *ipc, ipc_pipe_comp_connect *_connect)
 	if (!buffer)
 		return IPC4_INVALID_RESOURCE_ID;
 
-	irq_local_disable(flags);
-	list_item_del(buffer_comp_list(buffer, PPL_CONN_DIR_COMP_TO_BUFFER));
-	list_item_del(buffer_comp_list(buffer, PPL_CONN_DIR_BUFFER_TO_COMP));
-	irq_local_enable(flags);
+	pipeline_disconnect(src, buffer, PPL_CONN_DIR_COMP_TO_BUFFER);
+	pipeline_disconnect(sink, buffer, PPL_CONN_DIR_BUFFER_TO_COMP);
 
 	buffer_free(buffer);
 
@@ -389,10 +423,8 @@ int ipc_comp_disconnect(struct ipc *ipc, ipc_pipe_comp_connect *_connect)
 	return IPC4_SUCCESS;
 }
 
-/* dma index may be for playback or capture. Current
- * hw supports PLATFORM_MAX_DMA_CHAN of playback
- * and the index more than this will be capture. This function
- * convert dma id to dma channel
+/* dma index may be for playback or capture. Current hw supports PLATFORM_MAX_DMA_CHAN playback
+ * channels and the rest are for capture. This function converts DMA ID to DMA channel.
  */
 static inline int process_dma_index(uint32_t dma_id, uint32_t *dir, uint32_t *chan)
 {
@@ -494,7 +526,7 @@ static struct comp_dev *ipc4_create_dai(struct pipeline *pipe, uint32_t id, uint
 
 /* host does not send any params to FW since it expects simple copy
  * but sof needs hw params to feed pass-through pipeline. This
- * function rebuild the hw params based on fifo_size since only 48K
+ * function rebuilds the hw params based on fifo_size since only 48K
  * and 44.1K sample rate and 16 & 24bit are supported by chain dma.
  */
 static int construct_config(struct ipc4_copier_module_cfg *copier_cfg, uint32_t fifo_size,

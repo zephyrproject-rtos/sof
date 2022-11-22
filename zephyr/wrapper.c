@@ -6,7 +6,6 @@
  */
 
 #include <sof/init.h>
-#include <rtos/alloc.h>
 #include <sof/drivers/idc.h>
 #include <rtos/interrupt.h>
 #include <sof/drivers/interrupt-map.h>
@@ -25,6 +24,7 @@
 /* Zephyr includes */
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>
+#include <zephyr/pm/policy.h>
 #include <version.h>
 #include <zephyr/sys/__assert.h>
 #include <soc.h>
@@ -43,239 +43,6 @@ DECLARE_SOF_RT_UUID("zephyr", zephyr_uuid, 0x300aaad4, 0x45d2, 0x8313,
 		 0x25, 0xd0, 0x5e, 0x1d, 0x60, 0x86, 0xcd, 0xd1);
 
 DECLARE_TR_CTX(zephyr_tr, SOF_UUID(zephyr_uuid), LOG_LEVEL_INFO);
-
-/*
- * Memory - Create Zephyr HEAP for SOF.
- *
- * Currently functional but some items still WIP.
- */
-
-#ifndef HEAP_RUNTIME_SIZE
-#define HEAP_RUNTIME_SIZE	0
-#endif
-
-/* system size not declared on some platforms */
-#ifndef HEAP_SYSTEM_SIZE
-#define HEAP_SYSTEM_SIZE	0
-#endif
-
-/* The Zephyr heap */
-
-#ifdef CONFIG_IMX
-#define HEAPMEM_SIZE		(HEAP_SYSTEM_SIZE + HEAP_RUNTIME_SIZE + HEAP_BUFFER_SIZE)
-
-/*
- * Include heapmem variable in .heap_mem section, otherwise the HEAPMEM_SIZE is
- * duplicated in two sections and the sdram0 region overflows.
- */
-__section(".heap_mem") static uint8_t __aligned(64) heapmem[HEAPMEM_SIZE];
-
-#elif CONFIG_ACE
-
-#define HEAPMEM_SIZE 0x40000
-
-/*
- * System heap definition for ACE is defined below.
- * It needs to be explicitly packed into dedicated section
- * to allow memory management driver to control unused
- * memory pages.
- */
-__section(".heap_mem") static uint8_t __aligned(PLATFORM_DCACHE_ALIGN) heapmem[HEAPMEM_SIZE];
-
-#else
-
-extern char _end[], _heap_sentry[];
-#define heapmem ((uint8_t *)ALIGN_UP((uintptr_t)_end, PLATFORM_DCACHE_ALIGN))
-#define HEAPMEM_SIZE ((uint8_t *)_heap_sentry - heapmem)
-
-#endif
-
-static struct k_heap sof_heap;
-
-static int statics_init(const struct device *unused)
-{
-	ARG_UNUSED(unused);
-
-	sys_heap_init(&sof_heap.heap, heapmem, HEAPMEM_SIZE);
-
-	return 0;
-}
-
-SYS_INIT(statics_init, PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_OBJECTS);
-
-static void *heap_alloc_aligned(struct k_heap *h, size_t min_align, size_t bytes)
-{
-	k_spinlock_key_t key;
-	void *ret;
-
-	key = k_spin_lock(&h->lock);
-	ret = sys_heap_aligned_alloc(&h->heap, min_align, bytes);
-	k_spin_unlock(&h->lock, key);
-
-	return ret;
-}
-
-static void __sparse_cache *heap_alloc_aligned_cached(struct k_heap *h, size_t min_align, size_t bytes)
-{
-	void __sparse_cache *ptr;
-
-	/*
-	 * Zephyr sys_heap stores metadata at start of each
-	 * heap allocation. To ensure no allocated cached buffer
-	 * overlaps the same cacheline with the metadata chunk,
-	 * align both allocation start and size of allocation
-	 * to cacheline. As cached and non-cached allocations are
-	 * mixed, same rules need to be followed for both type of
-	 * allocations.
-	 */
-#ifdef CONFIG_SOF_ZEPHYR_HEAP_CACHED
-	min_align = MAX(PLATFORM_DCACHE_ALIGN, min_align);
-	bytes = ALIGN_UP(bytes, min_align);
-#endif
-
-	ptr = (__sparse_force void __sparse_cache *)heap_alloc_aligned(h, min_align, bytes);
-
-#ifdef CONFIG_SOF_ZEPHYR_HEAP_CACHED
-	if (ptr)
-		ptr = z_soc_cached_ptr((__sparse_force void *)ptr);
-#endif
-
-	return ptr;
-}
-
-static void heap_free(struct k_heap *h, void *mem)
-{
-	k_spinlock_key_t key = k_spin_lock(&h->lock);
-#ifdef CONFIG_SOF_ZEPHYR_HEAP_CACHED
-	void *mem_uncached;
-
-	if (is_cached(mem)) {
-		mem_uncached = z_soc_uncached_ptr((__sparse_force void __sparse_cache *)mem);
-		z_xtensa_cache_flush_inv(mem, sys_heap_usable_size(&h->heap, mem_uncached));
-
-		mem = mem_uncached;
-	}
-#endif
-
-	sys_heap_free(&h->heap, mem);
-
-	k_spin_unlock(&h->lock, key);
-}
-
-static inline bool zone_is_cached(enum mem_zone zone)
-{
-#ifdef CONFIG_SOF_ZEPHYR_HEAP_CACHED
-	switch (zone) {
-	case SOF_MEM_ZONE_SYS:
-	case SOF_MEM_ZONE_SYS_RUNTIME:
-	case SOF_MEM_ZONE_RUNTIME:
-	case SOF_MEM_ZONE_BUFFER:
-		return true;
-	default:
-		break;
-	}
-#endif
-
-	return false;
-}
-
-void *rmalloc(enum mem_zone zone, uint32_t flags, uint32_t caps, size_t bytes)
-{
-	void *ptr;
-
-	if (zone_is_cached(zone) && !(flags & SOF_MEM_FLAG_COHERENT)) {
-		ptr = (__sparse_force void *)heap_alloc_aligned_cached(&sof_heap, 0, bytes);
-	} else {
-		/*
-		 * XTOS alloc implementation has used dcache alignment,
-		 * so SOF application code is expecting this behaviour.
-		 */
-		ptr = heap_alloc_aligned(&sof_heap, PLATFORM_DCACHE_ALIGN, bytes);
-	}
-
-	if (!ptr && zone == SOF_MEM_ZONE_SYS)
-		k_panic();
-
-	return ptr;
-}
-
-/* Use SOF_MEM_ZONE_BUFFER at the moment */
-void *rbrealloc_align(void *ptr, uint32_t flags, uint32_t caps, size_t bytes,
-		      size_t old_bytes, uint32_t alignment)
-{
-	void *new_ptr;
-
-	if (!ptr) {
-		/* TODO: Use correct zone */
-		return rballoc_align(flags, caps, bytes, alignment);
-	}
-
-	/* Original version returns NULL without freeing this memory */
-	if (!bytes) {
-		/* TODO: Should we call rfree(ptr); */
-		tr_err(&zephyr_tr, "realloc failed for 0 bytes");
-		return NULL;
-	}
-
-	new_ptr = rballoc_align(flags, caps, bytes, alignment);
-	if (!new_ptr) {
-		return NULL;
-	}
-
-	if (!(flags & SOF_MEM_FLAG_NO_COPY)) {
-		memcpy(new_ptr, ptr, MIN(bytes, old_bytes));
-	}
-
-	rfree(ptr);
-
-	tr_info(&zephyr_tr, "rbealloc: new ptr %p", new_ptr);
-
-	return new_ptr;
-}
-
-/**
- * Similar to rmalloc(), guarantees that returned block is zeroed.
- *
- * @note Do not use  for buffers (SOF_MEM_ZONE_BUFFER zone).
- *       rballoc(), rballoc_align() to allocate memory for buffers.
- */
-void *rzalloc(enum mem_zone zone, uint32_t flags, uint32_t caps, size_t bytes)
-{
-	void *ptr = rmalloc(zone, flags, caps, bytes);
-
-	memset(ptr, 0, bytes);
-
-	return ptr;
-}
-
-/**
- * Allocates memory block from SOF_MEM_ZONE_BUFFER.
- * @param flags Flags, see SOF_MEM_FLAG_...
- * @param caps Capabilities, see SOF_MEM_CAPS_...
- * @param bytes Size in bytes.
- * @param alignment Alignment in bytes.
- * @return Pointer to the allocated memory or NULL if failed.
- */
-void *rballoc_align(uint32_t flags, uint32_t caps, size_t bytes,
-		    uint32_t alignment)
-{
-	if (flags & SOF_MEM_FLAG_COHERENT)
-		return heap_alloc_aligned(&sof_heap, alignment, bytes);
-
-	return (__sparse_force void *)heap_alloc_aligned_cached(&sof_heap, alignment, bytes);
-}
-
-/*
- * Free's memory allocated by above alloc calls.
- */
-void rfree(void *ptr)
-{
-	if (!ptr)
-		return;
-
-	heap_free(&sof_heap, ptr);
-}
-
 
 /*
  * Interrupts.
@@ -430,7 +197,7 @@ void sys_comp_module_selector_interface_init(void);
 #endif
 void sys_comp_switch_init(void);
 void sys_comp_tone_init(void);
-void sys_comp_eq_fir_init(void);
+void sys_comp_module_eq_fir_interface_init(void);
 void sys_comp_keyword_init(void);
 void sys_comp_asrc_init(void);
 void sys_comp_dcblock_init(void);
@@ -482,8 +249,6 @@ static inline const void *smex_placeholder_f(void)
  * compiler optimizes everything away.
  */
 const void *_smex_placeholder;
-
-static int w_core_enable_mask;
 
 int task_main_start(struct sof *sof)
 {
@@ -537,7 +302,7 @@ int task_main_start(struct sof *sof)
 		sys_comp_tone_init();
 
 	if (IS_ENABLED(CONFIG_COMP_FIR))
-		sys_comp_eq_fir_init();
+		sys_comp_module_eq_fir_interface_init();
 
 	if (IS_ENABLED(CONFIG_COMP_IIR))
 		sys_comp_eq_iir_init();
@@ -626,8 +391,10 @@ int task_main_start(struct sof *sof)
 	 * (only called from single core, no RMW lock)
 	 */
 	__ASSERT_NO_MSG(cpu_get_id() == PLATFORM_PRIMARY_CORE_ID);
-	w_core_enable_mask |= BIT(PLATFORM_PRIMARY_CORE_ID);
-
+#if defined(CONFIG_PM)
+	pm_policy_state_lock_get(PM_STATE_RUNTIME_IDLE, PM_ALL_SUBSTATES);
+	pm_policy_state_lock_get(PM_STATE_SOFT_OFF, PM_ALL_SUBSTATES);
+#endif
 	/* let host know DSP boot is complete */
 	ret = platform_boot_complete(0);
 
@@ -664,7 +431,7 @@ void platform_dai_timestamp(struct comp_dev *dai,
 		posn->flags |= SOF_TIME_DAI_VALID;
 
 	/* get SSP wallclock - DAI sets this to stream start value */
-	posn->wallclock = k_cycle_get_64() - posn->wallclock;
+	posn->wallclock = sof_cycle_get_64() - posn->wallclock;
 	posn->wallclock_hz = clock_get_freq(PLATFORM_DEFAULT_CLOCK);
 	posn->flags |= SOF_TIME_WALL_VALID;
 }
@@ -672,7 +439,7 @@ void platform_dai_timestamp(struct comp_dev *dai,
 /* get current wallclock for componnent */
 void platform_dai_wallclock(struct comp_dev *dai, uint64_t *wallclock)
 {
-	*wallclock = k_cycle_get_64();
+	*wallclock = sof_cycle_get_64();
 }
 
 /*
@@ -681,116 +448,6 @@ void platform_dai_wallclock(struct comp_dev *dai, uint64_t *wallclock)
  * Mostly empty today waiting pending Zephyr CAVS SMP integration.
  */
 #if CONFIG_MULTICORE && CONFIG_SMP
-static atomic_t start_flag;
-static atomic_t ready_flag;
-
-/* Zephyr kernel_internal.h interface */
-void smp_timer_init(void);
-
-static FUNC_NORETURN void secondary_init(void *arg)
-{
-	struct k_thread dummy_thread;
-
-	/*
-	 * This is an open-coded version of zephyr/kernel/smp.c
-	 * smp_init_top(). We do this so that we can call SOF
-	 * secondary_core_init() for each core.
-	 */
-
-	atomic_set(&ready_flag, 1);
-	z_smp_thread_init(arg, &dummy_thread);
-	smp_timer_init();
-
-	secondary_core_init(sof_get());
-
-#ifdef CONFIG_THREAD_STACK_INFO
-	dummy_thread.stack_info.start = (uintptr_t)z_interrupt_stacks +
-		arch_curr_cpu()->id * Z_KERNEL_STACK_LEN(CONFIG_ISR_STACK_SIZE);
-	dummy_thread.stack_info.size = Z_KERNEL_STACK_LEN(CONFIG_ISR_STACK_SIZE);
-#endif
-
-	z_smp_thread_swap();
-
-	CODE_UNREACHABLE; /* LCOV_EXCL_LINE */
-}
-
-int arch_cpu_enable_core(int id)
-{
-	pm_runtime_get(PM_RUNTIME_DSP, PWRD_BY_TPLG | id);
-
-	/* only called from single core, no RMW lock */
-	__ASSERT_NO_MSG(cpu_get_id() == PLATFORM_PRIMARY_CORE_ID);
-
-	w_core_enable_mask |= BIT(id);
-
-	return 0;
-}
-
-int z_wrapper_cpu_enable_secondary_core(int id)
-{
-	/*
-	 * This is an open-coded version of zephyr/kernel/smp.c
-	 * z_smp_start_cpu(). We do this, so we can use a customized
-	 * secondary_init() for SOF.
-	 */
-
-	if (arch_cpu_active(id))
-		return 0;
-
-#if ZEPHYR_VERSION(3, 0, 99) <= ZEPHYR_VERSION_CODE
-	z_init_cpu(id);
-#endif
-
-	atomic_clear(&start_flag);
-	atomic_clear(&ready_flag);
-
-	arch_start_cpu(id, z_interrupt_stacks[id], CONFIG_ISR_STACK_SIZE,
-		       secondary_init, &start_flag);
-
-	while (!atomic_get(&ready_flag))
-		k_busy_wait(100);
-
-	atomic_set(&start_flag, 1);
-
-	return 0;
-}
-
-int arch_cpu_restore_secondary_cores(void)
-{
-	/* TODO: use Zephyr version */
-	return 0;
-}
-
-int arch_cpu_secondary_cores_prepare_d0ix(void)
-{
-	/* TODO: use Zephyr version */
-	return 0;
-}
-
-void arch_cpu_disable_core(int id)
-{
-	/* TODO: call Zephyr API */
-
-	/* only called from single core, no RMW lock */
-	__ASSERT_NO_MSG(cpu_get_id() == PLATFORM_PRIMARY_CORE_ID);
-
-	w_core_enable_mask &= ~BIT(id);
-}
-
-int arch_cpu_is_core_enabled(int id)
-{
-	return w_core_enable_mask & BIT(id);
-}
-
-void cpu_power_down_core(uint32_t flags)
-{
-	/* TODO: use Zephyr version */
-}
-
-int arch_cpu_enabled_cores(void)
-{
-	return w_core_enable_mask;
-}
 
 static struct idc idc[CONFIG_MP_NUM_CPUS];
 static struct idc *p_idc[CONFIG_MP_NUM_CPUS];

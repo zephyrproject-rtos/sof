@@ -19,6 +19,7 @@
 #include <ipc/header.h>
 #include <ipc/stream.h>
 #include <ipc/topology.h>
+#include <ipc4/module.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -134,14 +135,16 @@ struct pipeline *pipeline_new(uint32_t pipeline_id, uint32_t priority, uint32_t 
 	p->trigger.cmd = COMP_TRIGGER_NO_ACTION;
 	ret = memcpy_s(&p->tctx, sizeof(struct tr_ctx), &pipe_tr,
 		       sizeof(struct tr_ctx));
-	assert(!ret);
+	if (ret < 0) {
+		pipe_err(p, "pipeline_new(): failed to copy trace settings");
+		goto free;
+	}
 
 	ret = pipeline_posn_offset_get(&p->posn_offset);
 	if (ret < 0) {
 		pipe_err(p, "pipeline_new(): pipeline_posn_offset_get failed %d",
 			 ret);
-		rfree(p);
-		return NULL;
+		goto free;
 	}
 
 	/* just for retrieving valid ipc_msg header */
@@ -151,12 +154,14 @@ struct pipeline *pipeline_new(uint32_t pipeline_id, uint32_t priority, uint32_t 
 		p->msg = ipc_msg_init(posn.rhdr.hdr.cmd, posn.rhdr.hdr.size);
 		if (!p->msg) {
 			pipe_err(p, "pipeline_new(): ipc_msg_init failed");
-			rfree(p);
-			return NULL;
+			goto free;
 		}
 	}
 
 	return p;
+free:
+	rfree(p);
+	return NULL;
 }
 
 static void buffer_set_comp(struct comp_buffer *buffer, struct comp_dev *comp,
@@ -234,6 +239,7 @@ void pipeline_disconnect(struct comp_dev *comp, struct comp_buffer *buffer, int 
 		dcache_writeback_invalidate_region(uncache_to_cache(buf_list->prev),
 						   sizeof(struct list_item));
 	list_item_del(buf_list);
+	buffer_set_comp(buffer, NULL, dir);
 	irq_local_enable(flags);
 }
 
@@ -335,19 +341,23 @@ static int pipeline_comp_reset(struct comp_dev *current,
 			       struct pipeline_walk_context *ctx, int dir)
 {
 	struct pipeline *p = ctx->comp_data;
-	int stream_direction = dir;
+	struct pipeline *p_current = current->pipeline;
 	int end_type;
 	int is_single_ppl = comp_is_single_pipeline(current, p->source_comp);
-	int is_same_sched =
-		pipeline_is_same_sched_comp(current->pipeline, p);
+	int is_same_sched = pipeline_is_same_sched_comp(p_current, p);
 	int err;
 
-	pipe_dbg(current->pipeline, "pipeline_comp_reset(), current->comp.id = %u, dir = %u",
+	pipe_dbg(p_current, "pipeline_comp_reset(), current->comp.id = %u, dir = %u",
 		 dev_comp_id(current), dir);
 
-	/* reset should propagate to the connected pipelines,
-	 * which need to be scheduled together
+	/*
+	 * Reset should propagate to the connected pipelines, which need to be
+	 * scheduled together, except for IPC4, where each pipeline receives
+	 * commands from the host separately
 	 */
+	if (!is_single_ppl && IPC4_MOD_ID(current->ipc_config.id))
+		return 0;
+
 	if (!is_single_ppl && !is_same_sched) {
 		/* If pipeline connected to the starting one is in improper
 		 * direction (CAPTURE towards DAI, PLAYBACK towards HOST),
@@ -355,14 +365,14 @@ static int pipeline_comp_reset(struct comp_dev *current,
 		 * trusted at this point, as it might not be configured yet,
 		 * hence checking for endpoint component type.
 		 */
-		end_type = comp_get_endpoint_type(current->pipeline->sink_comp);
-		if (stream_direction == SOF_IPC_STREAM_PLAYBACK) {
+		end_type = comp_get_endpoint_type(p_current->sink_comp);
+		switch (dir) {
+		case SOF_IPC_STREAM_PLAYBACK:
 			if (end_type == COMP_ENDPOINT_HOST ||
 			    end_type == COMP_ENDPOINT_NODE)
 				return 0;
-		}
-
-		if (stream_direction == SOF_IPC_STREAM_CAPTURE) {
+			break;
+		case SOF_IPC_STREAM_CAPTURE:
 			if (end_type == COMP_ENDPOINT_DAI ||
 			    end_type == COMP_ENDPOINT_NODE)
 				return 0;
@@ -526,7 +536,6 @@ struct comp_dev *pipeline_get_dai_comp_latency(uint32_t pipeline_id, uint32_t *l
 		uint64_t input_data, output_data;
 		struct ipc4_base_module_cfg input_base_cfg;
 		struct ipc4_base_module_cfg output_base_cfg;
-		const struct comp_driver *drv;
 		int ret;
 
 		/* Calculate pipeline latency */
@@ -535,13 +544,11 @@ struct comp_dev *pipeline_get_dai_comp_latency(uint32_t pipeline_id, uint32_t *l
 		if (!input_data || !output_data)
 			return NULL;
 
-		drv = source->drv;
-		ret = drv->ops.get_attribute(source, COMP_ATTR_BASE_CONFIG, &input_base_cfg);
+		ret = comp_get_attribute(source, COMP_ATTR_BASE_CONFIG, &input_base_cfg);
 		if (ret < 0)
 			return NULL;
 
-		drv = ipc_sink->cd->drv;
-		ret = drv->ops.get_attribute(ipc_sink->cd, COMP_ATTR_BASE_CONFIG, &output_base_cfg);
+		ret = comp_get_attribute(ipc_sink->cd, COMP_ATTR_BASE_CONFIG, &output_base_cfg);
 		if (ret < 0)
 			return NULL;
 

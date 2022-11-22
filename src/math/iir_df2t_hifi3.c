@@ -71,8 +71,9 @@ int32_t iir_df2t(struct iir_state_df2t *iir, int32_t x)
 	/* Coefficients order in coef[] is {a2, a1, b2, b1, b0, shift, gain} */
 	coefp = (ae_f32x2 *)&iir->coef[0];
 	delayp = (ae_f64 *)&iir->delay[0];
-	in = x;
 	for (j = 0; j < iir->biquads; j += nseries) {
+		/* the first for loop is for parallel EQs, and they have the same input */
+		in = x;
 		for (i = 0; i < nseries; i++) {
 			/* Compute output: Delay is kept Q17.47 while multiply
 			 * instruction gives Q2.30 x Q1.31 -> Q18.46. Need to
@@ -90,7 +91,7 @@ int32_t iir_df2t(struct iir_state_df2t *iir, int32_t x)
 			delayp++; /* Point to d1 */
 			AE_MULAF32R_HH(acc, coef_b0shift, in); /* Coef b0 */
 			acc = AE_SLAI64S(acc, 1); /* Convert to Q17.47 */
-			tmp = AE_ROUND32F48SSYM(acc); /* Rount to Q1.31 */
+			tmp = AE_ROUND32F48SSYM(acc); /* Round to Q1.31 */
 
 			/* Compute 1st delay d0 */
 			acc = AE_SRAI64(*delayp, 1); /* Convert d1 to Q18.46 */

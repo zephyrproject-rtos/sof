@@ -1,11 +1,28 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
 
-# W0311, W0312, C0103, C0116
-#pylint:disable=bad-indentation
-#pylint:disable=mixed-indentation
-#pylint:disable=invalid-name
-#pylint:disable=missing-function-docstring
+# Too much noise for now, these can be re-enabled after they've been
+# fixed (if that does not break `git blame` too much)
+
+# W0311, W0312, W0603
+# pylint:disable=bad-indentation
+# pylint:disable=mixed-indentation
+# pylint:disable=global-statement
+
+# C0103, C0114, C0116
+# pylint:disable=invalid-name
+# pylint:disable=missing-module-docstring
+# pylint:disable=missing-function-docstring
+
+# Non-indentation whitespace has been removed from newer pylint. It does
+# not hurt to keep them for older versions. The recommendation is to use
+# a formatter like `black` instead, unfortunately this would totally
+# destroy git blame, git revert, etc.
+
+# C0326, C0330
+# pylint:disable=bad-whitespace
+# pylint:disable=bad-continuation
+
 import argparse
 import shlex
 import subprocess
@@ -14,12 +31,15 @@ import errno
 import platform as py_platform
 import sys
 import shutil
-import multiprocessing
 import os
 import warnings
 # anytree module is defined in Zephyr build requirements
 from anytree import AnyNode, RenderTree
 from packaging import version
+
+# https://chrisyeh96.github.io/2017/08/08/definitive-guide-python-imports.html#case-3-importing-from-parent-directory
+sys.path.insert(1, os.path.join(sys.path[0], '..'))
+from tools.sof_ri_info import sof_ri_info
 
 MIN_PYTHON_VERSION = 3, 8
 assert sys.version_info >= MIN_PYTHON_VERSION, \
@@ -124,6 +144,7 @@ class validate_platforms_arguments(argparse.Action):
 					raise argparse.ArgumentError(self, f"Unsupported platform: {value}")
 		setattr(namespace, "platforms", values)
 
+args = None
 def parse_args():
 	global args
 	global west_top
@@ -184,9 +205,8 @@ Noted that with fw_naming set as 'AVS', there will be output subdirectories for 
     └── cnl"""
 	)
 	parser.add_argument("-j", "--jobs", required=False, type=int,
-						default=multiprocessing.cpu_count(),
-						help="Set number of make build jobs for rimage."
-						" Jobs=number of cores by default. Ignored by west build.")
+						help="Number of concurrent jobs. Passed to west build and"
+						" to cmake (for rimage)")
 	parser.add_argument("-k", "--key", type=pathlib.Path, required=False,
 						help="Path to a non-default rimage signing key.")
 	parser.add_argument("-o", "--overlay", type=pathlib.Path, required=False, action='append',
@@ -276,19 +296,20 @@ def execute_command(*run_args, **run_kwargs):
 def show_installed_files():
 	"""[summary] Scans output directory building binary tree from files and folders
 	then presents them in similar way to linux tree command."""
-	graph_root = AnyNode(name=STAGING_DIR.name, long_name=STAGING_DIR.name, parent=None)
-	relative_entries = [entry.relative_to(STAGING_DIR) for entry in STAGING_DIR.glob("**/*")]
+	graph_root = AnyNode(name=STAGING_DIR.name, long_name=".", parent=None)
+	relative_entries = [
+		entry.relative_to(STAGING_DIR) for entry in sorted(STAGING_DIR.glob("**/*"))
+	]
 	nodes = [ graph_root ]
 	for entry in relative_entries:
-		if str(entry.parent) == ".":
-			nodes.append(AnyNode(name=entry.name, long_name=str(entry), parent=graph_root))
-		else:
-			node_parent = [node for node in nodes if node.long_name == str(entry.parent)][0]
-			if not node_parent:
-				warnings.warn("Failed to construct installed files tree")
-				return
-			nodes.append(AnyNode(name=entry.name, long_name=str(entry), parent=node_parent))
-	for pre, fill, node in RenderTree(graph_root):
+		# Node's documentation does allow random attributes
+		# pylint: disable=no-member
+		# sorted() makes sure our parent is already there.
+		# This is slightly awkward, a recursive function would be more readable
+		matches = [node for node in nodes if node.long_name == str(entry.parent)]
+		assert len(matches) == 1, f'"{entry}" does not have exactly one parent'
+		nodes.append(AnyNode(name=entry.name, long_name=str(entry), parent=matches[0]))
+	for pre, _, node in RenderTree(graph_root):
 		print(f"{pre}{node.name}")
 
 def check_west_installation():
@@ -320,7 +341,7 @@ def west_reinitialize(west_root_dir: pathlib.Path, west_manifest_path: pathlib.P
 	print(f"{question}")
 	while True:
 		reinitialize_answer = input().lower()
-		if reinitialize_answer == "y" or reinitialize_answer == "n":
+		if reinitialize_answer in ["y", "n"]:
 			break
 		sys.stdout.write('Please respond with \'Y\' or \'n\'.\n')
 
@@ -368,7 +389,7 @@ def create_zephyr_directory():
 		# _better_ error message:
 		#         "zephyrproject already exists"
 
-	west_top.mkdir(mode=511, parents=False, exist_ok=False)
+	west_top.mkdir(parents=False, exist_ok=False)
 	west_top = west_top.resolve(strict=True)
 
 def create_zephyr_sof_symlink():
@@ -376,7 +397,7 @@ def create_zephyr_sof_symlink():
 	if not west_top.exists():
 		raise FileNotFoundError("No west top: {}".format(west_top))
 	audio_modules_dir = pathlib.Path(west_top, "modules", "audio")
-	audio_modules_dir.mkdir(mode=511, parents=True, exist_ok=True)
+	audio_modules_dir.mkdir(parents=True, exist_ok=True)
 	sof_symlink = pathlib.Path(audio_modules_dir, "sof")
 	# Symlinks creation requires administrative privileges in Windows or special user rights
 	try:
@@ -393,7 +414,8 @@ def create_zephyr_sof_symlink():
 def west_update():
 	"""[summary] Clones all west manifest projects to specified revisions"""
 	global west_top
-	execute_command(["west", "update"], check=True, timeout=3000, cwd=west_top)
+	execute_command(["west", "update" , "--narrow", "--fetch-opt=--depth=5"],
+			timeout=3000, cwd=west_top)
 
 
 def get_build_and_sof_version(abs_build_dir):
@@ -421,6 +443,7 @@ def get_build_and_sof_version(abs_build_dir):
 
 	return sof_fw_version, sof_build_version
 
+STAGING_DIR = None
 def build_platforms():
 	global west_top, SOF_TOP
 	print(f"SOF_TOP={SOF_TOP}")
@@ -434,7 +457,7 @@ def build_platforms():
 
 	# smex does not use 'install -D'
 	sof_output_dir = pathlib.Path(STAGING_DIR, "sof")
-	sof_output_dir.mkdir(mode=511, parents=True, exist_ok=True)
+	sof_output_dir.mkdir(parents=True, exist_ok=True)
 	for platform in args.platforms:
 		if args.use_platform_subdir:
 			sof_platform_output_dir = pathlib.Path(sof_output_dir, platform)
@@ -494,6 +517,9 @@ def build_platforms():
 		if args.pristine:
 			build_cmd += ["-p", "always"]
 
+		if args.jobs is not None:
+			build_cmd += [f"--build-opt=-j{args.jobs}"]
+
 		build_cmd.append('--')
 		if args.cmake_args:
 			build_cmd += args.cmake_args
@@ -523,23 +549,49 @@ def build_platforms():
 				sys.exit("Zephyr project not found. Please run this script with -u flag or `west update zephyr` manually.")
 			else: # unknown failure
 				raise cpe
+
+		# Building smex and rimage once per platform is a small waste of time
+		# but it saves a lot of code in this script.
 		smex_executable = pathlib.Path(west_top, platform_build_dir_name, "zephyr", "smex_ep",
 			"build", "smex")
 		fw_ldc_file = pathlib.Path(sof_platform_output_dir, f"sof-{platform}.ldc")
 		input_elf_file = pathlib.Path(west_top, platform_build_dir_name, "zephyr", "zephyr.elf")
 		# Extract metadata
 		execute_command([str(smex_executable), "-l", str(fw_ldc_file), str(input_elf_file)])
+
 		# CMake - configure rimage module
 		rimage_dir_name="build-rimage"
-		rimage_source_dir = pathlib.Path(SOF_TOP, "rimage")
+
+		# Paths in `west.yml` must be "static", we cannot have something like a
+		# variable "$my_sof_path/rimage/" checkout.  In the future "rimage/" will
+		# be moved one level up and it won't be nested inside "sof/" anymore. But
+		# for now we must stick to `sof/rimage/[tomlc99]` for
+		# backwards-compatibility with XTOS platforms and git submodules, see more
+		# detailed comments in west.yml
+		rimage_source_dir = pathlib.Path(west_top, "sof", "rimage")
+
+		# Detect non-west rimage duplicates
+		nested_rimage = pathlib.Path(SOF_TOP, "rimage")
+		if nested_rimage.is_dir() and not nested_rimage.samefile(rimage_source_dir):
+			raise RuntimeError(
+				f"""Two rimage source directories found.
+     Move non-west {nested_rimage} out of west workspace {west_top}.
+     See output of 'west list'."""
+			)
+
 		execute_command(["cmake", "-B", rimage_dir_name, "-S", str(rimage_source_dir)],
 			cwd=west_top)
 		# CMake build rimage module
-		execute_command(["cmake", "--build", rimage_dir_name, "-j", str(args.jobs)],
-			cwd=west_top)
+		rimage_build_cmd = ["cmake", "--build", rimage_dir_name]
+		if args.jobs is not None:
+			rimage_build_cmd.append(f"-j{args.jobs}")
+		if args.verbose > 1:
+			rimage_build_cmd.append("-v")
+		execute_command(rimage_build_cmd, cwd=west_top)
+
 		# Sign firmware
 		rimage_executable = shutil.which("rimage", path=pathlib.Path(west_top, rimage_dir_name))
-		rimage_config = pathlib.Path(SOF_TOP, "rimage", "config")
+		rimage_config = pathlib.Path(rimage_source_dir, "config")
 		sign_cmd = ["west"]
 		sign_cmd += ["-v"] * args.verbose
 		sign_cmd += ["sign", "--build-dir", platform_build_dir_name, "--tool", "rimage"]
@@ -554,32 +606,41 @@ def build_platforms():
 
 		sign_cmd += ["--tool-data", str(rimage_config), "--", "-k", str(signing_key)]
 
-		sof_fw_version, sof_build_version = get_build_and_sof_version(abs_build_dir)
+		sof_fw_vers, sof_build_vers = get_build_and_sof_version(abs_build_dir)
 
-		sign_cmd += ["-f", sof_fw_version]
+		sign_cmd += ["-f", sof_fw_vers]
 
-		sign_cmd += ["-b", sof_build_version]
+		sign_cmd += ["-b", sof_build_vers]
 
-		if args.fw_naming == "AVS":
-			output_fwname="dsp_basefw.bin"
-		else:
-			output_fwname="".join(["sof-", platform, ".ri"])
 		if args.ipc == "IPC4":
 			rimage_desc = pathlib.Path(SOF_TOP, "rimage", "config", platform_dict["IPC4_RIMAGE_DESC"])
 			sign_cmd += ["-c", str(rimage_desc)]
 
 		execute_command(sign_cmd, cwd=west_top)
-		# Install by copy
-		fw_file_to_copy = pathlib.Path(west_top, platform_build_dir_name, "zephyr", "zephyr.ri")
-		if args.key_type_subdir == "none":
-			fw_file_installed = pathlib.Path(sof_platform_output_dir,
-							 f"{output_fwname}")
+
+		if platform not in RI_INFO_UNSUPPORTED:
+			reproducible_checksum(platform, west_top / platform_build_dir_name / "zephyr" / "zephyr.ri")
+
+		# Install to STAGING_DIR
+		abs_build_dir = pathlib.Path(west_top) / platform_build_dir_name / "zephyr"
+
+		if args.fw_naming == "AVS":
+			# Disguise ourselves for local testing purposes
+			output_fwname="dsp_basefw.bin"
 		else:
-			fw_file_installed = pathlib.Path(sof_platform_output_dir, args.key_type_subdir,
-							 f"{output_fwname}")
-		os.makedirs(os.path.dirname(fw_file_installed), exist_ok=True)
+			# Regular name
+			output_fwname="".join(["sof-", platform, ".ri"])
+
+		shutil.copy2(abs_build_dir / "zephyr.ri", abs_build_dir / output_fwname)
+		fw_file_to_copy = abs_build_dir / output_fwname
+
+		install_key_dir = sof_platform_output_dir
+		if args.key_type_subdir != "none":
+			install_key_dir = install_key_dir / args.key_type_subdir
+
+		os.makedirs(install_key_dir, exist_ok=True)
 		# looses file owner and group - file is commonly accessible
-		shutil.copy2(str(fw_file_to_copy), str(fw_file_installed))
+		shutil.copy2(fw_file_to_copy, install_key_dir)
 
 	src_dest_list = []
 
@@ -609,6 +670,29 @@ def build_platforms():
 			  "zephyr" / "soc" / "xtensa" / "intel_adsp" / "tools",
 			tools_output_dir,
 			symlinks=True, ignore_dangling_symlinks=True, dirs_exist_ok=True)
+
+# As of October 2022, sof_ri_info.py expects .ri files to include a CSE manifest / signature.
+# Don't run sof_ri_info and ignore silently .ri files that don't have one.
+RI_INFO_UNSUPPORTED = []
+
+RI_INFO_UNSUPPORTED += ['imx8', 'imx8x', 'imx8m']
+RI_INFO_UNSUPPORTED += ['rn']
+RI_INFO_UNSUPPORTED += ['mt8186', 'mt8195']
+
+# sof_ri_info.py has not caught up with the latest rimage yet: these will print a warning.
+RI_INFO_FIXME = ['mtl']
+
+def reproducible_checksum(platform, ri_file):
+
+	if platform in RI_INFO_FIXME:
+		print(f"FIXME: sof_ri_info does not support '{platform}'")
+		return
+
+	parsed_ri = sof_ri_info.parse_fw_bin(ri_file, False, False)
+	repro_output = ri_file.parent / ("reproducible-" + ri_file.name)
+	chk256 = sof_ri_info.EraseVariables(ri_file, parsed_ri, west_top / repro_output)
+	print('sha256sum {0}\n{1} {0}'.format(repro_output, chk256))
+
 
 def main():
 	parse_args()

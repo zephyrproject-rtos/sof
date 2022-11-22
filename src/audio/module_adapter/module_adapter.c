@@ -31,12 +31,13 @@ LOG_MODULE_REGISTER(module_adapter, CONFIG_SOF_LOG_LEVEL);
  * \return: a pointer to newly created module adapter component on success. NULL on error.
  */
 struct comp_dev *module_adapter_new(const struct comp_driver *drv,
-				    struct comp_ipc_config *config,
-				    struct module_interface *interface, void *spec)
+				    const struct comp_ipc_config *config,
+				    struct module_interface *interface, const void *spec)
 {
 	int ret;
 	struct comp_dev *dev;
 	struct processing_module *mod;
+	struct module_config *dst;
 
 	comp_cl_dbg(drv, "module_adapter_new() start");
 
@@ -61,19 +62,20 @@ struct comp_dev *module_adapter_new(const struct comp_driver *drv,
 		return NULL;
 	}
 
+	dst = &mod->priv.cfg;
 	mod->dev = dev;
 
 	comp_set_drvdata(dev, mod);
 	list_init(&mod->sink_buffer_list);
 
 #if CONFIG_IPC_MAJOR_3
-	unsigned char *data;
+	const unsigned char *data;
 	uint32_t size;
 
 	switch (config->type) {
 	case SOF_COMP_VOLUME:
 	{
-		struct ipc_config_volume *ipc_volume = spec;
+		const struct ipc_config_volume *ipc_volume = spec;
 
 		size = sizeof(*ipc_volume);
 		data = spec;
@@ -81,7 +83,7 @@ struct comp_dev *module_adapter_new(const struct comp_driver *drv,
 	}
 	default:
 	{
-		struct ipc_config_process *ipc_module_adapter = spec;
+		const struct ipc_config_process *ipc_module_adapter = spec;
 
 		size = ipc_module_adapter->size;
 		data = ipc_module_adapter->data;
@@ -97,20 +99,19 @@ struct comp_dev *module_adapter_new(const struct comp_driver *drv,
 				 ret);
 			goto err;
 		}
+		dst->init_data = dst->data;
 	}
 #else
-	struct module_data *md = &mod->priv;
-	struct module_config *dst = &md->cfg;
-
 	if (drv->type == SOF_COMP_MODULE_ADAPTER) {
-		struct ipc_config_process *ipc_module_adapter = spec;
+		const struct ipc_config_process *ipc_module_adapter = spec;
 
-		dst->data = ipc_module_adapter->data;
+		dst->init_data = ipc_module_adapter->data;
 		dst->size = ipc_module_adapter->size;
-	} else {
-		dst->data = spec;
-	}
 
+		memcpy(&dst->base_cfg, ipc_module_adapter->data, sizeof(dst->base_cfg));
+	} else {
+		dst->init_data = spec;
+	}
 #endif
 
 	/* Init processing module */
@@ -122,7 +123,7 @@ struct comp_dev *module_adapter_new(const struct comp_driver *drv,
 	}
 
 #if CONFIG_IPC_MAJOR_4
-	dst->data = NULL;
+	dst->init_data = NULL;
 #endif
 	dev->state = COMP_STATE_READY;
 
@@ -148,6 +149,7 @@ int module_adapter_prepare(struct comp_dev *dev)
 	struct processing_module *mod = comp_get_drvdata(dev);
 	struct module_data *md = &mod->priv;
 	struct comp_buffer __sparse_cache *buffer_c;
+	struct comp_buffer __sparse_cache *sink_c;
 	struct comp_buffer *sink;
 	struct list_item *blist, *_blist;
 	uint32_t buff_periods;
@@ -170,8 +172,12 @@ int module_adapter_prepare(struct comp_dev *dev)
 	 * parameter from sink buffer is settled, and still prior to all references to period_bytes.
 	 */
 	sink = list_first_item(&dev->bsink_list, struct comp_buffer, source_list);
-	mod->period_bytes = audio_stream_period_bytes(&sink->stream, dev->frames);
+	sink_c = buffer_acquire(sink);
+
+	mod->period_bytes = audio_stream_period_bytes(&sink_c->stream, dev->frames);
 	comp_dbg(dev, "module_adapter_prepare(): got period_bytes = %u", mod->period_bytes);
+
+	buffer_release(sink_c);
 
 	/* Prepare module */
 	ret = module_prepare(mod);
@@ -270,8 +276,8 @@ int module_adapter_prepare(struct comp_dev *dev)
 	list_for_item(blist, &dev->bsource_list) {
 		size_t size = MAX(mod->deep_buff_bytes, mod->period_bytes);
 
-		mod->input_buffers[i].data = (__sparse_force void __sparse_cache *)rballoc(0,
-									SOF_MEM_CAPS_RAM, size);
+		mod->input_buffers[i].data =
+			(__sparse_force void __sparse_cache *)rballoc(0, SOF_MEM_CAPS_RAM, size);
 		if (!mod->input_buffers[i].data) {
 			comp_err(mod->dev, "module_adapter_prepare(): Failed to alloc input buffer data");
 			ret = -ENOMEM;
@@ -283,8 +289,9 @@ int module_adapter_prepare(struct comp_dev *dev)
 	/* allocate memory for output buffer data */
 	i = 0;
 	list_for_item(blist, &dev->bsink_list) {
-		mod->output_buffers[i].data = (__sparse_force void __sparse_cache *)rballoc(0,
-							SOF_MEM_CAPS_RAM, md->mpd.out_buff_size);
+		mod->output_buffers[i].data =
+			(__sparse_force void __sparse_cache *)rballoc(0, SOF_MEM_CAPS_RAM,
+								      md->mpd.out_buff_size);
 		if (!mod->output_buffers[i].data) {
 			comp_err(mod->dev, "module_adapter_prepare(): Failed to alloc output buffer data");
 			ret = -ENOMEM;
@@ -715,7 +722,8 @@ out:
 	return ret;
 }
 
-static int module_adapter_set_params(struct comp_dev *dev, struct sof_ipc_ctrl_data *cdata)
+static int module_adapter_get_set_params(struct comp_dev *dev, struct sof_ipc_ctrl_data *cdata,
+					 bool set)
 {
 	struct processing_module *mod = comp_get_drvdata(dev);
 	struct module_data *md = &mod->priv;
@@ -743,17 +751,22 @@ static int module_adapter_set_params(struct comp_dev *dev, struct sof_ipc_ctrl_d
 	}
 
 	/* IPC3 does not use config_id, so pass 0 for config ID as it will be ignored anyway */
-	if (md->ops->set_configuration)
+	if (set && md->ops->set_configuration)
 		return md->ops->set_configuration(mod, 0, pos, data_offset_size,
 						  (const uint8_t *)cdata->data[0].data,
 						  cdata->num_elems, NULL, 0);
+	else if (!set && md->ops->get_configuration)
+		return md->ops->get_configuration(mod, pos, &data_offset_size,
+						  (uint8_t *)cdata->data[0].data,
+						  cdata->num_elems);
 
-	comp_warn(dev, "module_adapter_set_params(): no set_configuration op set for %d",
+	comp_warn(dev, "module_adapter_get_set_params(): no configuration op set for %d",
 		  dev_comp_id(dev));
 	return 0;
 }
 
-static int module_adapter_ctrl_set_data(struct comp_dev *dev, struct sof_ipc_ctrl_data *cdata)
+static int module_adapter_ctrl_get_set_data(struct comp_dev *dev, struct sof_ipc_ctrl_data *cdata,
+					    bool set)
 {
 	int ret;
 	struct processing_module *mod = comp_get_drvdata(dev);
@@ -773,7 +786,7 @@ static int module_adapter_ctrl_set_data(struct comp_dev *dev, struct sof_ipc_ctr
 		ret = -EIO;
 		break;
 	case SOF_CTRL_CMD_BINARY:
-		ret = module_adapter_set_params(dev, cdata);
+		ret = module_adapter_get_set_params(dev, cdata, set);
 		break;
 	default:
 		comp_err(dev, "module_adapter_ctrl_set_data error: unknown set data command");
@@ -796,11 +809,10 @@ int module_adapter_cmd(struct comp_dev *dev, int cmd, void *data, int max_data_s
 
 	switch (cmd) {
 	case COMP_CMD_SET_DATA:
-		ret = module_adapter_ctrl_set_data(dev, cdata);
+		ret = module_adapter_ctrl_get_set_data(dev, cdata, true);
 		break;
 	case COMP_CMD_GET_DATA:
-		comp_err(dev, "module_adapter_cmd() get_data not implemented yet.");
-		ret = -ENODATA;
+		ret = module_adapter_ctrl_get_set_data(dev, cdata, false);
 		break;
 	case COMP_CMD_SET_VALUE:
 		/*
@@ -909,7 +921,7 @@ void module_adapter_free(struct comp_dev *dev)
 
 #if CONFIG_IPC_MAJOR_4
 int module_set_large_config(struct comp_dev *dev, uint32_t param_id, bool first_block,
-			    bool last_block, uint32_t data_offset_size, char *data)
+			    bool last_block, uint32_t data_offset_size, const char *data)
 {
 	struct processing_module *mod = comp_get_drvdata(dev);
 	struct module_data *md = &mod->priv;
@@ -974,8 +986,8 @@ int module_adapter_get_attribute(struct comp_dev *dev, uint32_t type, void *valu
 
 	switch (type) {
 	case COMP_ATTR_BASE_CONFIG:
-		memcpy_s(value, sizeof(struct ipc4_base_module_cfg), mod->priv.private,
-			 sizeof(struct ipc4_base_module_cfg));
+		memcpy_s(value, sizeof(struct ipc4_base_module_cfg),
+			 &mod->priv.cfg.base_cfg, sizeof(mod->priv.cfg.base_cfg));
 		break;
 	default:
 		return -EINVAL;
@@ -989,7 +1001,7 @@ int module_adapter_get_attribute(struct comp_dev *dev, uint32_t type, void *valu
 	return -EINVAL;
 }
 int module_set_large_config(struct comp_dev *dev, uint32_t param_id, bool first_block,
-			    bool last_block, uint32_t data_offset, char *data)
+			    bool last_block, uint32_t data_offset, const char *data)
 {
 	return 0;
 }

@@ -30,9 +30,9 @@
 
 LOG_MODULE_DECLARE(ipc, CONFIG_SOF_LOG_LEVEL);
 
-int dai_config_dma_channel(struct comp_dev *dev, void *spec_config)
+int dai_config_dma_channel(struct comp_dev *dev, const void *spec_config)
 {
-	struct ipc4_copier_module_cfg *copier_cfg = spec_config;
+	const struct ipc4_copier_module_cfg *copier_cfg = spec_config;
 	struct dai_data *dd = comp_get_drvdata(dev);
 	struct ipc_config_dai *dai = &dd->ipc_config;
 	int channel;
@@ -171,7 +171,7 @@ static void get_llp_reg_info(struct comp_dev *dev, uint32_t *node_id, uint32_t *
 			*offset = offsetof(struct ipc4_fw_registers, llp_sndw_reading_slots);
 			*offset += id * sizeof(struct ipc4_llp_reading_slot);
 		} else {
-			comp_err(dev, "get_llp_reg_info(): sndw id %u out of array bounds.", id);
+			comp_dbg(dev, "get_llp_reg_info(): sndw id %u out of array bounds.", id);
 			*node_id = 0;
 		}
 
@@ -181,7 +181,7 @@ static void get_llp_reg_info(struct comp_dev *dev, uint32_t *node_id, uint32_t *
 			*offset = offsetof(struct ipc4_fw_registers, llp_gpdma_reading_slots);
 			*offset += id * sizeof(struct ipc4_llp_reading_slot);
 		} else {
-			comp_err(dev, "get_llp_reg_info(): gpdma id %u out of array bounds.", id);
+			comp_dbg(dev, "get_llp_reg_info(): gpdma id %u out of array bounds.", id);
 			*node_id = 0;
 		}
 
@@ -256,9 +256,9 @@ static void dai_dma_position_init(struct comp_dev *dev)
 }
 
 int dai_config(struct comp_dev *dev, struct ipc_config_dai *common_config,
-	       void *spec_config)
+	       const void *spec_config)
 {
-	struct ipc4_copier_module_cfg *copier_cfg = spec_config;
+	const struct ipc4_copier_module_cfg *copier_cfg = spec_config;
 	struct dai_data *dd = comp_get_drvdata(dev);
 	int size;
 	int ret;
@@ -319,6 +319,57 @@ int dai_config(struct comp_dev *dev, struct ipc_config_dai *common_config,
 	return dai_set_config(dd->dai, common_config, copier_cfg->gtw_cfg.config_data);
 }
 
+#if CONFIG_ZEPHYR_NATIVE_DRIVERS
+int dai_position(struct comp_dev *dev, struct sof_ipc_stream_posn *posn)
+{
+	struct dai_data *dd = comp_get_drvdata(dev);
+	struct dma_status status;
+	int ret;
+
+	/* total processed bytes count */
+	posn->dai_posn = dd->total_data_processed;
+
+	platform_dai_wallclock(dev, &dd->wallclock);
+	posn->wallclock = dd->wallclock;
+
+	ret = dma_get_status(dd->dma->z_dev, dd->chan->index, &status);
+	if (ret < 0)
+		return ret;
+
+	posn->comp_posn = status.total_copied;
+
+	return 0;
+}
+
+void dai_dma_position_update(struct comp_dev *dev)
+{
+	struct dai_data *dd = comp_get_drvdata(dev);
+	struct dma_status status;
+	int ret;
+
+	uint32_t node_id;
+	uint32_t llp_reg_offset;
+	struct ipc4_llp_reading_slot slot;
+
+	get_llp_reg_info(dev, &node_id, &llp_reg_offset);
+	if (!node_id)
+		return;
+
+	ret = dma_get_status(dd->dma->z_dev, dd->chan->index, &status);
+	if (ret < 0)
+		return;
+
+	platform_dai_wallclock(dev, &dd->wallclock);
+
+	slot.node_id = node_id;
+	slot.reading.llp_l = (uint32_t)status.total_copied;
+	slot.reading.llp_u = (uint32_t)(status.total_copied >> 32);
+	slot.reading.wclk_l = (uint32_t)dd->wallclock;
+	slot.reading.wclk_u = (uint32_t)(dd->wallclock >> 32);
+
+	mailbox_sw_regs_write(llp_reg_offset, &slot, sizeof(slot));
+}
+#else
 int dai_position(struct comp_dev *dev, struct sof_ipc_stream_posn *posn)
 {
 	struct dai_data *dd = comp_get_drvdata(dev);
@@ -362,3 +413,4 @@ void dai_dma_position_update(struct comp_dev *dev)
 
 	mailbox_sw_regs_write(llp_reg_offset, &slot, sizeof(slot));
 }
+#endif

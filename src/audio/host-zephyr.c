@@ -640,12 +640,12 @@ static int host_trigger(struct comp_dev *dev, int cmd)
 }
 
 static struct comp_dev *host_new(const struct comp_driver *drv,
-				 struct comp_ipc_config *config,
-				 void *spec)
+				 const struct comp_ipc_config *config,
+				 const void *spec)
 {
 	struct comp_dev *dev;
 	struct host_data *hd;
-	struct ipc_config_host *ipc_host = spec;
+	const struct ipc_config_host *ipc_host = spec;
 	uint32_t dir;
 
 	comp_cl_dbg(&comp_host, "host_new()");
@@ -797,7 +797,7 @@ static int host_params(struct comp_dev *dev,
 	hd->cont_update_posn = params->cont_update_posn;
 
 	/* retrieve DMA buffer address alignment */
-	err = dma_get_attribute(hd->dma, DMA_ATTR_BUFFER_ADDRESS_ALIGNMENT,
+	err = dma_get_attribute(hd->dma->z_dev, DMA_ATTR_BUFFER_ADDRESS_ALIGNMENT,
 				&addr_align);
 	if (err < 0) {
 		comp_err(dev, "host_params(): could not get dma buffer address alignment, err = %d",
@@ -806,7 +806,7 @@ static int host_params(struct comp_dev *dev,
 	}
 
 	/* retrieve DMA buffer size alignment */
-	err = dma_get_attribute(hd->dma, DMA_ATTR_BUFFER_ALIGNMENT, &align);
+	err = dma_get_attribute(hd->dma->z_dev, DMA_ATTR_BUFFER_SIZE_ALIGNMENT, &align);
 	if (err < 0 || !align) {
 		comp_err(dev, "host_params(): could not get valid dma buffer alignment, err = %d, align = %u",
 			 err, align);
@@ -814,11 +814,9 @@ static int host_params(struct comp_dev *dev,
 	}
 
 	/* retrieve DMA buffer period count */
-	err = dma_get_attribute(hd->dma, DMA_ATTR_BUFFER_PERIOD_COUNT,
-				&period_count);
-	if (err < 0 || !period_count) {
-		comp_err(dev, "host_params(): could not get valid dma buffer period count, err = %d, period_count = %u",
-			 err, period_count);
+	period_count = hd->dma->plat_data.period_count;
+	if (!period_count) {
+		comp_err(dev, "host_params(): could not get valid dma buffer period count");
 		return -EINVAL;
 	}
 
@@ -912,7 +910,7 @@ static int host_params(struct comp_dev *dev,
 	 */
 	channel = dma_request_channel(hd->dma->z_dev, &hda_chan);
 	if (channel < 0) {
-		comp_err(dev, "host_params(): hd->chan is NULL");
+		comp_err(dev, "host_params(): requested channel %d is busy", hda_chan);
 		err = -ENODEV;
 		goto out;
 	}
@@ -970,7 +968,7 @@ static int host_params(struct comp_dev *dev,
 		goto out;
 	}
 
-	err = dma_get_attribute(hd->dma, DMA_ATTR_COPY_ALIGNMENT,
+	err = dma_get_attribute(hd->dma->z_dev, DMA_ATTR_COPY_ALIGNMENT,
 				&hd->dma_copy_align);
 
 	if (err < 0) {

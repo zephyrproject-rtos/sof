@@ -93,6 +93,8 @@ ifdef(`BT_OFFLOAD', `
 # PCM99 <---- volume <---- DMIC01 (dmic 48k capture)
 # PCM100 <---- kpb <---- DMIC16K (dmic 16k capture)
 
+ifdef(`SPK_MIC_PERIOD_US',`', `define(`SPK_MIC_PERIOD_US', 1000)')
+
 ifdef(`NO_AMP',,`
 ifdef(`SMART_AMP',`
 # Smart amplifier related
@@ -142,7 +144,13 @@ ifdef(`IGO', `define(`DMIC_PIPELINE_48k_CORE_ID', 1)')
 # define pcm, pipeline and dai id
 define(KWD_PIPE_SCH_DEADLINE_US, 20000)
 # include the generic dmic with kwd
-include(`platform/intel/intel-generic-dmic-kwd.m4')
+ifdef(`NOHOTWORD',
+`
+define(NO16KDMIC)
+define(DMIC_48k_CORE_ID, 1)
+define(DMICPROC, passthrough)
+include(`platform/intel/intel-generic-dmic.m4')',
+`include(`platform/intel/intel-generic-dmic-kwd.m4')')
 
 # define(`SSP_MCLK', )
 ifdef(`SSP_MCLK',`',`define(`SSP_MCLK', 19200000)')
@@ -170,7 +178,7 @@ ifdef(`SMART_AMP',,`
 # Schedule 48 frames per 1000us deadline with priority 0 on core 0
 PIPELINE_PCM_ADD(sof/pipe-volume-demux-playback.m4,
 	1, 0, 2, s32le,
-	1000, 0, 0,
+	SPK_MIC_PERIOD_US, 0, 0,
 	48000, 48000, 48000)')')
 
 # Low Latency playback pipeline 2 on PCM 1 using max 2 channels of s32le.
@@ -273,14 +281,14 @@ ifdef(`SMART_AMP',,`
 # Buffers use s16le format, with 48 frame per 1000us on core 0 with priority 0
 DAI_ADD(sof/pipe-dai-playback.m4,
         1, SSP, SPK_SSP_INDEX, SPK_SSP_NAME,
-        PIPELINE_SOURCE_1, 2, s16le,
-        1000, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
+        PIPELINE_SOURCE_1, 2, FMT,
+        SPK_MIC_PERIOD_US, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
 
 # The echo refenrence pipeline has no connections in it,
 # it is used for the capture DAI widget to dock.
 DAI_ADD(sof/pipe-echo-ref-dai-capture.m4,
 	29, SSP, SPK_SSP_INDEX, SPK_SSP_NAME,
-	PIPELINE_SINK_29, 3, s16le,
+	PIPELINE_SINK_29, 3, FMT,
 	1000, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
 
 # Capture pipeline 9 from demux on PCM 6 using max 2 channels of s32le.
@@ -357,10 +365,25 @@ ifdef(`NO_AMP',,`
 ifdef(`SMART_AMP',,`
 `# SSP' SPK_SSP_INDEX `(ID: 7)'
 DAI_CONFIG(SSP, SPK_SSP_INDEX, SPK_BE_ID, SPK_SSP_NAME,
+ifelse(
+	CODEC, `MAX98360A', `
         SSP_CONFIG(I2S, SSP_CLOCK(mclk, SSP_MCLK, codec_mclk_in),
                 SSP_CLOCK(bclk, 1536000, codec_slave),
                 SSP_CLOCK(fsync, 48000, codec_slave),
                 SSP_TDM(2, 16, 3, 3),
-                SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 16)))')')
+                SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 16)))',
+	CODEC, `RT1019P', `
+        SSP_CONFIG(I2S, SSP_CLOCK(mclk, SSP_MCLK, codec_mclk_in),
+                SSP_CLOCK(bclk, 1536000, codec_slave),
+                SSP_CLOCK(fsync, 48000, codec_slave),
+                SSP_TDM(2, 16, 3, 3),
+                SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 16)))',
+	CODEC, `RT1015P', `
+        SSP_CONFIG(I2S, SSP_CLOCK(mclk, SSP_MCLK, codec_mclk_in),
+                SSP_CLOCK(bclk, 3072000, codec_slave),
+                SSP_CLOCK(fsync, 48000, codec_slave),
+                SSP_TDM(2, 32, 3, 3),
+                SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 32)))',
+)')')
 
 DEBUG_END

@@ -275,6 +275,7 @@ static void volume_ramp(struct processing_module *mod)
 	int i;
 	bool ramp_finished = true;
 
+	cd->copy_gain = true;
 	/* No need to ramp in idle state, jump volume to request. */
 	if (dev->state == COMP_STATE_READY) {
 		for (i = 0; i < PLATFORM_MAX_CHANNELS; i++)
@@ -361,6 +362,7 @@ static void reset_state(struct vol_data *cd)
 	cd->vol_ramp_frames = 0;
 	cd->vol_ramp_elapsed_frames = 0;
 	cd->sample_rate = 0;
+	cd->copy_gain = true;
 }
 
 #if CONFIG_IPC_MAJOR_3
@@ -540,7 +542,8 @@ static int volume_init(struct processing_module *mod)
 	struct module_data *md = &mod->priv;
 	struct module_config *cfg = &md->cfg;
 	struct comp_dev *dev = mod->dev;
-	struct ipc4_peak_volume_module_cfg *vol = cfg->data;
+	const struct ipc4_peak_volume_module_cfg *vol = cfg->init_data;
+	uint32_t target_volume[SOF_IPC_MAX_CHANNELS];
 	struct vol_data *cd;
 	const size_t vol_size = sizeof(int32_t) * SOF_IPC_MAX_CHANNELS * 4;
 	uint32_t channels_count;
@@ -565,9 +568,7 @@ static int volume_init(struct processing_module *mod)
 
 	md->private = cd;
 
-	mailbox_hostbox_read(&cd->base, sizeof(cd->base), 0, sizeof(cd->base));
-
-	channels_count = cd->base.audio_fmt.channels_count;
+	channels_count = mod->priv.cfg.base_cfg.audio_fmt.channels_count;
 
 	for (channel = 0; channel < channels_count ; channel++) {
 		if (vol->config[0].channel_id == IPC4_ALL_CHANNELS_MASK)
@@ -575,16 +576,16 @@ static int volume_init(struct processing_module *mod)
 		else
 			channel_cfg = channel;
 
-		vol->config[channel].target_volume =
+		target_volume[channel] =
 			convert_volume_ipc4_to_ipc3(dev, vol->config[channel].target_volume);
 
 		set_volume_ipc4(cd, channel,
-				vol->config[channel_cfg].target_volume,
+				target_volume[channel_cfg],
 				vol->config[channel_cfg].curve_type,
 				vol->config[channel_cfg].curve_duration);
 	}
 
-	init_ramp(cd, vol->config[0].curve_duration, vol->config[0].target_volume);
+	init_ramp(cd, vol->config[0].curve_duration, target_volume[0]);
 
 	instance_id = IPC4_INST_ID(dev_comp_id(dev));
 	if (instance_id >= IPC4_MAX_PEAK_VOL_REG_SLOTS) {
@@ -920,7 +921,7 @@ static int volume_set_config(struct processing_module *mod, uint32_t config_id,
 	struct vol_data *cd = module_get_private_data(mod);
 	struct module_data *md = &mod->priv;
 	struct comp_dev *dev = mod->dev;
-	struct ipc4_peak_volume_config *cdata;
+	struct ipc4_peak_volume_config cdata;
 	int i, ret;
 
 	comp_dbg(dev, "volume_set_config()");
@@ -937,19 +938,19 @@ static int volume_set_config(struct processing_module *mod, uint32_t config_id,
 	    md->state < MODULE_INITIALIZED)
 		return 0;
 
-	cdata = (struct ipc4_peak_volume_config *)ASSUME_ALIGNED(fragment, 8);
-	cdata->target_volume = convert_volume_ipc4_to_ipc3(dev, cdata->target_volume);
+	cdata = *(const struct ipc4_peak_volume_config *)fragment;
+	cdata.target_volume = convert_volume_ipc4_to_ipc3(dev, cdata.target_volume);
 
-	init_ramp(cd, cdata->curve_duration, cdata->target_volume);
+	init_ramp(cd, cdata.curve_duration, cdata.target_volume);
 	cd->ramp_finished = true;
 
 	switch (config_id) {
 	case IPC4_VOLUME:
-		if (cdata->channel_id == IPC4_ALL_CHANNELS_MASK) {
-			for (i = 0; i < cd->base.audio_fmt.channels_count; i++) {
-				set_volume_ipc4(cd, i, cdata->target_volume,
-						cdata->curve_type,
-						cdata->curve_duration);
+		if (cdata.channel_id == IPC4_ALL_CHANNELS_MASK) {
+			for (i = 0; i < mod->priv.cfg.base_cfg.audio_fmt.channels_count; i++) {
+				set_volume_ipc4(cd, i, cdata.target_volume,
+						cdata.curve_type,
+						cdata.curve_duration);
 
 				cd->volume[i] = cd->vol_min;
 				volume_set_chan(mod, i, cd->tvolume[i], true);
@@ -957,14 +958,14 @@ static int volume_set_config(struct processing_module *mod, uint32_t config_id,
 					cd->ramp_finished = false;
 			}
 		} else {
-			set_volume_ipc4(cd, cdata->channel_id, cdata->target_volume,
-					cdata->curve_type,
-					cdata->curve_duration);
+			set_volume_ipc4(cd, cdata.channel_id, cdata.target_volume,
+					cdata.curve_type,
+					cdata.curve_duration);
 
-			cd->volume[cdata->channel_id] = cd->vol_min;
-			volume_set_chan(mod, cdata->channel_id, cd->tvolume[cdata->channel_id],
+			cd->volume[cdata.channel_id] = cd->vol_min;
+			volume_set_chan(mod, cdata.channel_id, cd->tvolume[cdata.channel_id],
 					true);
-			if (cd->volume[cdata->channel_id] != cd->tvolume[cdata->channel_id])
+			if (cd->volume[cdata.channel_id] != cd->tvolume[cdata.channel_id])
 				cd->ramp_finished = false;
 		}
 
@@ -1011,7 +1012,6 @@ static int volume_get_config(struct processing_module *mod,
 
 static int volume_params(struct processing_module *mod)
 {
-	struct vol_data *cd = module_get_private_data(mod);
 	struct sof_ipc_stream_params *params = mod->stream_params;
 	struct sof_ipc_stream_params vol_params;
 	struct comp_dev *dev = mod->dev;
@@ -1023,19 +1023,19 @@ static int volume_params(struct processing_module *mod)
 	comp_dbg(dev, "volume_params()");
 
 	vol_params = *params;
-	vol_params.channels = cd->base.audio_fmt.channels_count;
-	vol_params.rate = cd->base.audio_fmt.sampling_frequency;
-	vol_params.buffer_fmt = cd->base.audio_fmt.interleaving_style;
+	vol_params.channels = mod->priv.cfg.base_cfg.audio_fmt.channels_count;
+	vol_params.rate = mod->priv.cfg.base_cfg.audio_fmt.sampling_frequency;
+	vol_params.buffer_fmt = mod->priv.cfg.base_cfg.audio_fmt.interleaving_style;
 
-	audio_stream_fmt_conversion(cd->base.audio_fmt.depth,
-				    cd->base.audio_fmt.valid_bit_depth,
+	audio_stream_fmt_conversion(mod->priv.cfg.base_cfg.audio_fmt.depth,
+				    mod->priv.cfg.base_cfg.audio_fmt.valid_bit_depth,
 				    &frame_fmt, &valid_fmt,
-				    cd->base.audio_fmt.s_type);
+				    mod->priv.cfg.base_cfg.audio_fmt.s_type);
 
 	vol_params.frame_fmt = frame_fmt;
 
 	for (i = 0; i < SOF_IPC_MAX_CHANNELS; i++)
-		vol_params.chmap[i] = (cd->base.audio_fmt.ch_map >> i * 4) & 0xf;
+		vol_params.chmap[i] = (mod->priv.cfg.base_cfg.audio_fmt.ch_map >> i * 4) & 0xf;
 
 	component_set_nearest_period_frames(dev, vol_params.rate);
 
@@ -1293,8 +1293,8 @@ static int volume_reset(struct processing_module *mod)
 static const struct comp_driver comp_volume;
 
 static struct comp_dev *volume_new(const struct comp_driver *drv,
-				   struct comp_ipc_config *config,
-				   void *spec)
+				   const struct comp_ipc_config *config,
+				   const void *spec)
 {
 	struct processing_module *mod;
 	struct module_config *dst;
@@ -1501,7 +1501,7 @@ static const struct comp_driver comp_volume = {
 	.uid	= SOF_RT_UUID(volume_uuid),
 	.tctx	= &volume_tr,
 	.ops	= {
-		.create	= volume_new,
+		.create		= volume_new,
 		.free		= volume_legacy_free,
 		.cmd		= volume_cmd,
 		.trigger	= volume_trigger,

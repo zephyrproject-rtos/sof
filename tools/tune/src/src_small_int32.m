@@ -21,7 +21,8 @@ fs_matrix = [ 0 1 1 1 0 1 0 ; ... %  8
 cfg.ctype = 'int32';
 cfg.profile = 'small';
 cfg.quality = 1.0;
+cfg.thdn = -90;
 cfg.speed = 0;
-cfg.gain = -1; % Make gain -1 dB
+cfg.gain = 0;
 
 src_generate(fs1, fs2, fs_matrix, cfg);

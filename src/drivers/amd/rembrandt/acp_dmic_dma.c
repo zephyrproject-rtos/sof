@@ -78,7 +78,6 @@ static void acp_dmic_dma_channel_put(struct dma_chan_data *channel)
 
 static int acp_dmic_dma_start(struct dma_chan_data *channel)
 {
-	acp_wov_pdm_no_of_channels_t pdm_channels;
 	acp_wov_pdm_decimation_factor_t deci_fctr;
 	acp_wov_misc_ctrl_t wov_misc_ctrl;
 	acp_wov_pdm_dma_enable_t  pdm_dma_enable;
@@ -93,15 +92,13 @@ static int acp_dmic_dma_start(struct dma_chan_data *channel)
 	hs_irer = (acp_hstdm_irer_t)io_reg_read((PU_REGISTER_BASE + ACP_HSTDM_IRER));
 	acp_pdm_en = (uint32_t)io_reg_read(PU_REGISTER_BASE + ACP_WOV_PDM_ENABLE);
 
-	if (!hs_iter.bits.hstdm_txen && !hs_irer.bits.hstdm_rx_en && !acp_pdm_en)
+	if (!hs_iter.bits.hstdm_txen && !hs_irer.bits.hstdm_rx_en && !acp_pdm_en) {
+		io_reg_write((PU_REGISTER_BASE + ACP_CLKMUX_SEL), ACP_ACLK_CLK_SEL);
 		/* Request SMU to set aclk to 600 Mhz */
 		acp_change_clock_notify(600000000);
+	}
 	channel->status = COMP_STATE_ACTIVE;
 	if (channel->direction == DMA_DIR_DEV_TO_MEM) {
-		/* Channel for DMIC */
-		pdm_channels.bits.pdm_no_of_channels = 0;
-		io_reg_write(PU_REGISTER_BASE + ACP_WOV_PDM_NO_OF_CHANNELS,
-							pdm_channels.u32all);
 		/* Decimation Factor */
 		deci_fctr.u32all = 2;
 		io_reg_write(PU_REGISTER_BASE + ACP_WOV_PDM_DECIMATION_FACTOR,
@@ -193,9 +190,11 @@ static int acp_dmic_dma_stop(struct dma_chan_data *channel)
 	hs_irer = (acp_hstdm_irer_t)io_reg_read((PU_REGISTER_BASE + ACP_HSTDM_IRER));
 	acp_pdm_en = (uint32_t)io_reg_read(PU_REGISTER_BASE + ACP_WOV_PDM_ENABLE);
 
-	if (!hs_iter.bits.hstdm_txen && !hs_irer.bits.hstdm_rx_en && !acp_pdm_en)
+	if (!hs_iter.bits.hstdm_txen && !hs_irer.bits.hstdm_rx_en && !acp_pdm_en) {
 		/* Request SMU to set aclk to minimum aclk */
 		acp_change_clock_notify(0);
+		io_reg_write((PU_REGISTER_BASE + ACP_CLKMUX_SEL), ACP_INTERNAL_CLK_SEL);
+	}
 	return 0;
 }
 
