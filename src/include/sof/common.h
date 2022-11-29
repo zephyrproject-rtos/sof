@@ -98,7 +98,12 @@
  * are _also_ copied unprocessed to the .x[.in] linker script
  */
 #define ALIGN(val, align) ALIGN_UP_INTERNAL(val, align)
+#ifndef __ZEPHYR__
 #define DIV_ROUND_UP(val, div) (((val) + (div) - 1) / (div))
+#else
+/* use Zephyr DIV_ROUND_UP definition */
+#include <zephyr/sys/util.h>
+#endif
 
 #if !defined(__ASSEMBLER__)
 
