@@ -89,6 +89,7 @@ set(TPLGS
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98357a-rt5682-4ch\;-DCODEC=MAX98360A_TDM\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=2\;-D4CH_PASSTHROUGH"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682\;-DCODEC=MAX98360A\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DSPK_MIC_PERIOD_US=10000"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682-waves\;-DCODEC=MAX98360A\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DWAVES"
+	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682-waves-spk-only\;-DCODEC=MAX98360A\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DWAVES\;-DWAVES_SPK_ONLY"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682-2way\;-DCODEC=MAX98360A_TDM\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-D2CH_2WAY\;-DBT_OFFLOAD"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682-2way-pdm1\;-DCODEC=MAX98360A_TDM\;-DFMT=s32le\;-DDMIC_DAI_LINK_16k_PDM=STEREO_PDM1\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-D2CH_2WAY\;-DBT_OFFLOAD"
 	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-rt5682-4ch\;-DCODEC=MAX98360A_TDM\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-D4CH_PASSTHROUGH\;-DBT_OFFLOAD"
@@ -110,6 +111,7 @@ set(TPLGS
 	"sof-tgl-max98357a-rt5682\;sof-adl-cs35l41\;-DCODEC=CS35L41\;-DFMT=s24le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_ssp_amp\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DNO_HEADPHONE"
 	"sof-tgl-max98357a-rt5682\;sof-adl-cs35l41-waves\;-DCODEC=CS35L41\;-DFMT=s24le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_ssp_amp\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DNO_HEADPHONE\;-DWAVES\;-DNOHOTWORD\;-DNO16KDMIC"
 	"sof-tgl-max98357a-rt5682\;sof-adl-cs35l41-google-aec-waves\;-DCODEC=CS35L41\;-DFMT=s24le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_ssp_amp\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DNO_HEADPHONE\;-DGOOGLE_RTC_AUDIO_PROCESSING\;-DWAVES\;-DNOHOTWORD\;-DNO16KDMIC\;-DSPK_MIC_PERIOD_US=10000"
+	"sof-tgl-max98357a-rt5682\;sof-adl-max98360a-da7219\;-DUSE_DA7219\;-DCODEC=MAX98360A\;-DFMT=s32le\;-DPLATFORM=adl\;-DLINUX_MACHINE_DRIVER=sof_rt5682\;-DAMP_SSP=1\;-DBT_OFFLOAD\;-DSPK_MIC_PERIOD_US=10000\;-DNOHOTWORD\;-DNO16KDMIC"
 	"sof-tgl-max98373-rt5682\;sof-tgl-max98373-rt5682\;-DAMP_SSP=1"
 	"sof-tgl-max98373-rt5682\;sof-tgl-max98373-rt5682-igonr\;-DAMP_SSP=1\;-DIGO"
 	"sof-tgl-max98373-rt5682\;sof-tgl-max98373-rt5682-xperi\;-DAMP_SSP=1\;-DINCLUDE_IIR_EQ=1"
@@ -164,7 +166,8 @@ set(TPLGS
 	"sof-imx8-nocodec-sai\;sof-imx8-nocodec-sai"
 	"sof-imx8-wm8960-mixer\;sof-imx8-wm8960-mixer\;-DCODEC=wm8960\;-DRATE=48000\;-DSAI_INDEX=1"
 	"sof-imx8-wm8960-mixer\;sof-imx8-wm8962-mixer\;-DCODEC=wm8962\;-DRATE=48000\;-DSAI_INDEX=1"
-	"sof-imx8-compr-wm8960-mixer\;sof-imx8-compr-wm8960-mixer"
+	"sof-imx8-compr-wm8960-mixer\;sof-imx8-compr-wm8960-mixer\;-DCODEC=wm8960\;-DSAI_INDEX=1"
+	"sof-imx8-compr-wm8960-mixer\;sof-imx8-compr-wm8962-mixer\;-DCODEC=wm8962\;-DSAI_INDEX=1"
 	"sof-imx8-wm8960-kwd\;sof-imx8-wm8960-kwd"
 	"sof-imx8-cs42888-mixer\;sof-imx8-cs42888-mixer"
 	"sof-imx8-wm8960\;sof-imx8-wm8960\;-DCODEC=wm8960\;-DRATE=48000\;-DPPROC=volume\;-DSAI_INDEX=1"
@@ -177,7 +180,8 @@ set(TPLGS
 	## end i.MX8 (i.MX8QM and i.MX8QXP) topologies
 
 	## i.MX8MP topologies
-	"sof-imx8mp-compr-wm8960-mixer\;sof-imx8mp-compr-wm8960-mixer"
+	"sof-imx8-compr-wm8960-mixer\;sof-imx8mp-compr-wm8960-mixer\;-DCODEC=wm8960\;-DSAI_INDEX=3"
+	"sof-imx8-compr-wm8960-mixer\;sof-imx8mp-compr-wm8962-mixer\;-DCODEC=wm8962\;-DSAI_INDEX=3"
 	"sof-imx8-wm8960-mixer\;sof-imx8mp-wm8960-mixer\;-DCODEC=wm8960\;-DRATE=48000\;-DSAI_INDEX=3"
 	"sof-imx8-wm8960-mixer\;sof-imx8mp-wm8962-mixer\;-DCODEC=wm8962\;-DRATE=48000\;-DSAI_INDEX=3"
 	"sof-imx8mp-wm8960-kwd\;sof-imx8mp-wm8960-kwd"

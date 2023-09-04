@@ -11,19 +11,8 @@ choice
 
 config TIGERLAKE
 	bool "Build for Tigerlake"
-	select XT_IRQ_MAP
-	select DMA_GW
-	select DW
-	select DW_DMA if !ZEPHYR_NATIVE_DRIVERS
-	select MEM_WND
-	select DMA_HW_LLI
-	select DW_DMA_AGGREGATED_IRQ
-	select DMA_FIFO_PARTITION
 	select CAVS
 	select CAVS_VERSION_2_5
-	select XT_WAITI_DELAY
-	select NO_SECONDARY_CORE_ROM
-	select CAVS_USE_LPRO_IN_WAITI
 	help
 	  Select if your target platform is Tigerlake-compatible
 
@@ -366,15 +355,6 @@ config L1_DRAM_MEMORY_BANK_SIZE
 	help
 	  Specifies DRAM block size.
 	  It can be used to calculate DRAM size.
-
-config CAVS_LPS
-	bool "Intel cAVS Low Power Sequencer for Power Management"
-	depends on CAVS
-	default n
-	help
-	  Select this to enable Intel cAVS Low Power Sequencer.
-	  This option is required to support S0ix/D0ix mode
-	  on cAVS platforms.
 
 config CAVS_USE_LPRO_IN_WAITI
 	bool "Use low power ring oscillator in WFI"

@@ -7,10 +7,11 @@
 #ifndef __SOF_AUDIO_CROSSOVER_CROSSOVER_H__
 #define __SOF_AUDIO_CROSSOVER_CROSSOVER_H__
 
-#include <stdint.h>
-#include <sof/platform.h>
+#include <sof/audio/module_adapter/module/module_interface.h>
 #include <sof/math/iir_df2t.h>
+#include <sof/platform.h>
 #include <user/crossover.h>
+#include <stdint.h>
 
 struct comp_buffer;
 struct comp_dev;
@@ -66,9 +67,11 @@ struct crossover_state {
 	struct iir_state_df2t highpass[CROSSOVER_MAX_LR4];
 };
 
-typedef void (*crossover_process)(const struct comp_dev *dev,
-				  const struct comp_buffer __sparse_cache *source,
-				  struct comp_buffer __sparse_cache *sinks[],
+struct comp_data;
+
+typedef void (*crossover_process)(struct comp_data *cd,
+				  struct input_stream_buffer *bsource,
+				  struct output_stream_buffer *bsinks[],
 				  int32_t num_sinks,
 				  uint32_t frames);
 
@@ -79,6 +82,10 @@ typedef void (*crossover_split)(int32_t in, int32_t out[],
 struct comp_data {
 	/**< filter state */
 	struct crossover_state state[PLATFORM_MAX_CHANNELS];
+#if CONFIG_IPC_MAJOR_4
+	uint32_t output_pin_index[SOF_CROSSOVER_MAX_STREAMS];
+	uint32_t num_output_pins;
+#endif
 	struct comp_data_blob_handler *model_handler;
 	struct sof_crossover_config *config;      /**< pointer to setup blob */
 	enum sof_ipc_frame source_format;         /**< source frame format */
@@ -135,7 +142,7 @@ extern const size_t crossover_split_fncount;
  */
 static inline crossover_split crossover_find_split_func(int32_t num_sinks)
 {
-	if (num_sinks < CROSSOVER_2WAY_NUM_SINKS &&
+	if (num_sinks < CROSSOVER_2WAY_NUM_SINKS ||
 	    num_sinks > CROSSOVER_4WAY_NUM_SINKS)
 		return NULL;
 	// The functions in the map are offset by 2 indices.

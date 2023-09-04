@@ -75,7 +75,6 @@ struct mixin_sink_config {
 /* mixin component private data */
 struct mixin_data {
 	normal_mix_func normal_mix_channel;
-	remap_mix_func remap_mix_channel;
 	mute_func mute_channel;
 	struct mixin_sink_config sink_config[MIXIN_MAX_SINKS];
 };
@@ -182,46 +181,17 @@ static int mix_and_remap(struct comp_dev *dev, const struct mixin_data *mixin_da
 
 	sink_config = &mixin_data->sink_config[sink_index];
 
-	if (sink_config->mixer_mode == IPC4_MIXER_NORMAL_MODE) {
-		/* Mix streams. mix_channel() is reused here to mix streams, not individual
-		 * channels. To do so, (multichannel) stream is treated as single channel:
-		 * channel count is passed as 1, channel index is 0, frame indices (start_frame
-		 * and mixed_frame) and frame count are multiplied by real stream channel count.
-		 */
-		mixin_data->normal_mix_channel(sink, start_frame * audio_stream_get_channels(sink),
-					       mixed_frames * audio_stream_get_channels(sink),
-					       source,
-					       frame_count * audio_stream_get_channels(sink),
-					       sink_config->gain);
-	} else if (sink_config->mixer_mode == IPC4_MIXER_CHANNEL_REMAPPING_MODE) {
-		int i;
+	/* Mix streams. mix_channel() is reused here to mix streams, not individual
+	 * channels. To do so, (multichannel) stream is treated as single channel:
+	 * channel count is passed as 1, channel index is 0, frame indices (start_frame
+	 * and mixed_frame) and frame count are multiplied by real stream channel count.
+	 */
+	mixin_data->normal_mix_channel(sink, start_frame * audio_stream_get_channels(sink),
+				       mixed_frames * audio_stream_get_channels(sink),
+				       source,
+				       frame_count * audio_stream_get_channels(sink),
+				       sink_config->gain);
 
-		for (i = 0; i < audio_stream_get_channels(sink); i++) {
-			uint8_t source_channel =
-				(sink_config->output_channel_map >> (i * 4)) & 0xf;
-
-			if (source_channel == 0xf) {
-				mixin_data->mute_channel(sink, i, start_frame, mixed_frames,
-							 frame_count);
-			} else {
-				if (source_channel >= audio_stream_get_channels(source)) {
-					comp_err(dev, "Out of range chmap: 0x%x, src channels: %u",
-						 sink_config->output_channel_map,
-						 audio_stream_get_channels(source));
-					return -EINVAL;
-				}
-				mixin_data->remap_mix_channel(sink, i,
-							      audio_stream_get_channels(sink),
-							      start_frame, mixed_frames,
-							      source, source_channel,
-							      audio_stream_get_channels(source),
-							      frame_count, sink_config->gain);
-			}
-		}
-	} else {
-		comp_err(dev, "Unexpected mixer mode: %d", sink_config->mixer_mode);
-		return -EINVAL;
-	}
 
 	return 0;
 }
@@ -561,7 +531,6 @@ static int mixin_reset(struct processing_module *mod)
 	comp_dbg(dev, "mixin_reset()");
 
 	mixin_data->normal_mix_channel = NULL;
-	mixin_data->remap_mix_channel = NULL;
 	mixin_data->mute_channel = NULL;
 
 	return 0;
@@ -699,7 +668,6 @@ static int mixin_prepare(struct processing_module *mod,
 	case SOF_IPC_FRAME_S24_4LE:
 	case SOF_IPC_FRAME_S32_LE:
 		md->normal_mix_channel = normal_mix_get_processing_function(fmt);
-		md->remap_mix_channel = remap_mix_get_processing_function(fmt);
 		md->mute_channel = mute_mix_get_processing_function(fmt);
 		break;
 	default:
@@ -707,7 +675,7 @@ static int mixin_prepare(struct processing_module *mod,
 		return -EINVAL;
 	}
 
-	if (!md->normal_mix_channel || !md->remap_mix_channel || !md->mute_channel) {
+	if (!md->normal_mix_channel || !md->mute_channel) {
 		comp_err(dev, "have not found the suitable processing function");
 		return -EINVAL;
 	}

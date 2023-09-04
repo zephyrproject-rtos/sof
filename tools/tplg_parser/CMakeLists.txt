@@ -21,16 +21,18 @@ target_sources(sof_tplg_parser PUBLIC
 	tokens.c
 	process.c
 	control.c
+	pcm.c
 	pga.c
 	mixer.c
 	pipeline.c
-	pcm.c
+	host.c
 	dai.c
 	asrc.c
 	src.c
 	buffer.c
 	graph.c
 	object.c
+	audio_formats.c
 )
 
 sof_append_relative_path_definitions(sof_tplg_parser)
@@ -39,6 +41,7 @@ target_include_directories(sof_tplg_parser PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_include_directories(sof_tplg_parser PRIVATE ${sof_source_directory}/src/include)
 target_include_directories(sof_tplg_parser PRIVATE ${sof_source_directory}/src/arch/host/include)
 target_include_directories(sof_tplg_parser PRIVATE ${sof_source_directory}/src/platform/library/include)
+target_include_directories(sof_tplg_parser PRIVATE ${sof_source_directory}/src/audio)
 
 # TODO: The topology parser should NOT need to include RTOS header. FIX.
 target_include_directories(sof_tplg_parser PRIVATE ${sof_source_directory}/xtos/include)

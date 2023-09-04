@@ -2,9 +2,7 @@
 
 # platform-specific values
 
-if(CONFIG_TIGERLAKE)
-	set(platform_folder tigerlake)
-elseif(CONFIG_IMX8)
+if(CONFIG_IMX8)
 	set(platform_folder imx8)
 elseif(CONFIG_IMX8X)
 	set(platform_folder imx8)
@@ -98,7 +96,11 @@ else()
 endif()
 
 # C & ASM flags
-target_compile_options(sof_options INTERFACE ${stdlib_flag} -fno-inline-functions ${XTENSA_C_ASM_FLAGS})
+if(CONFIG_COMPILER_INLINE_FUNCTION_OPTION)
+	target_compile_options(sof_options INTERFACE ${stdlib_flag} ${XTENSA_C_ASM_FLAGS})
+else()
+	target_compile_options(sof_options INTERFACE ${stdlib_flag} -fno-inline-functions ${XTENSA_C_ASM_FLAGS})
+endif()
 
 # C flags
 # TODO: Generator expressions are supported only with Make and Ninja,

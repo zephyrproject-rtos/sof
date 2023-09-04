@@ -50,8 +50,6 @@
 
 LOG_MODULE_DECLARE(ipc, CONFIG_SOF_LOG_LEVEL);
 
-#define IPC4_MOD_ID(x) ((x) >> 16)
-
 extern struct tr_ctx comp_tr;
 
 void ipc_build_stream_posn(struct sof_ipc_stream_posn *posn, uint32_t type,
@@ -142,16 +140,6 @@ struct comp_dev *comp_new_ipc4(struct ipc4_module_init_instance *module_init)
 	return dev;
 }
 
-static struct ipc_comp_dev *get_comp(struct ipc *ipc, uint16_t type, uint32_t id)
-{
-	struct ipc_comp_dev *c = ipc_get_comp_by_id(ipc, id);
-
-	if (c && c->type == type)
-		return c;
-
-	return NULL;
-}
-
 struct ipc_comp_dev *ipc_get_comp_by_ppl_id(struct ipc *ipc, uint16_t type, uint32_t ppl_id)
 {
 	struct ipc_comp_dev *icd;
@@ -185,7 +173,7 @@ static int ipc4_create_pipeline(struct ipc4_pipeline_create *pipe_desc)
 	struct ipc *ipc = ipc_get();
 
 	/* check whether pipeline id is already taken or in use */
-	ipc_pipe = ipc_get_comp_by_id(ipc, pipe_desc->primary.r.instance_id);
+	ipc_pipe = ipc_get_pipeline_by_id(ipc, pipe_desc->primary.r.instance_id);
 	if (ipc_pipe) {
 		tr_err(&ipc_tr, "ipc: comp id is already taken, pipe_desc->instance_id = %u",
 		       (uint32_t)pipe_desc->primary.r.instance_id);
@@ -299,7 +287,7 @@ int ipc_pipeline_free(struct ipc *ipc, uint32_t comp_id)
 	int ret;
 
 	/* check whether pipeline exists */
-	ipc_pipe = get_comp(ipc, COMP_TYPE_PIPELINE, comp_id);
+	ipc_pipe = ipc_get_pipeline_by_id(ipc, comp_id);
 	if (!ipc_pipe)
 		return IPC4_INVALID_RESOURCE_ID;
 
@@ -328,20 +316,14 @@ int ipc_pipeline_free(struct ipc *ipc, uint32_t comp_id)
 }
 
 static struct comp_buffer *ipc4_create_buffer(struct comp_dev *src, struct comp_dev *sink,
-					      uint32_t src_queue, uint32_t dst_queue)
+					      uint32_t src_obs, uint32_t src_queue,
+					      uint32_t dst_queue)
 {
-	struct ipc4_base_module_cfg src_cfg;
 	struct sof_ipc_buffer ipc_buf;
-	int buf_size, ret;
-
-	ret = comp_get_attribute(src, COMP_ATTR_BASE_CONFIG, &src_cfg);
-	if (ret < 0) {
-		tr_err(&ipc_tr, "failed to get base config for src %#x", dev_comp_id(src));
-		return NULL;
-	}
+	int buf_size;
 
 	/* double it since obs is single buffer size */
-	buf_size = src_cfg.obs * 2;
+	buf_size = src_obs * 2;
 
 	memset(&ipc_buf, 0, sizeof(ipc_buf));
 	ipc_buf.size = buf_size;
@@ -355,8 +337,11 @@ int ipc_comp_connect(struct ipc *ipc, ipc_pipe_comp_connect *_connect)
 {
 	struct ipc4_module_bind_unbind *bu;
 	struct comp_buffer *buffer;
+	struct comp_buffer __sparse_cache *buffer_c;
 	struct comp_dev *source;
 	struct comp_dev *sink;
+	struct ipc4_base_module_cfg source_src_cfg;
+	struct ipc4_base_module_cfg sink_src_cfg;
 	uint32_t flags;
 	int src_id, sink_id;
 	int ret;
@@ -376,12 +361,35 @@ int ipc_comp_connect(struct ipc *ipc, ipc_pipe_comp_connect *_connect)
 	if (!cpu_is_me(source->ipc_config.core) && source->ipc_config.core == sink->ipc_config.core)
 		return ipc4_process_on_core(source->ipc_config.core, false);
 
-	buffer = ipc4_create_buffer(source, sink, bu->extension.r.src_queue,
+	ret = comp_get_attribute(source, COMP_ATTR_BASE_CONFIG, &source_src_cfg);
+	if (ret < 0) {
+		tr_err(&ipc_tr, "failed to get base config for module %#x", dev_comp_id(source));
+		return IPC4_FAILURE;
+	}
+
+	ret = comp_get_attribute(sink, COMP_ATTR_BASE_CONFIG, &sink_src_cfg);
+	if (ret < 0) {
+		tr_err(&ipc_tr, "failed to get base config for module %#x", dev_comp_id(sink));
+		return IPC4_FAILURE;
+	}
+
+	buffer = ipc4_create_buffer(source, sink, source_src_cfg.obs, bu->extension.r.src_queue,
 				    bu->extension.r.dst_queue);
 	if (!buffer) {
 		tr_err(&ipc_tr, "failed to allocate buffer to bind %d to %d", src_id, sink_id);
 		return IPC4_OUT_OF_MEMORY;
 	}
+
+	/*
+	 * set ibs and obs in sink/src api of created buffer
+	 *	IBS of a buffer is OBS of source component
+	 *	OBS of a buffer is IBS of destination component
+	 */
+
+	buffer_c = buffer_acquire(buffer);
+	source_set_ibs(audio_stream_get_source(&buffer_c->stream), source_src_cfg.obs);
+	sink_set_obs(audio_stream_get_sink(&buffer_c->stream), sink_src_cfg.ibs);
+	buffer_release(buffer_c);
 
 	/*
 	 * Connect and bind the buffer to both source and sink components with the interrupts
@@ -405,6 +413,7 @@ int ipc_comp_connect(struct ipc *ipc, ipc_pipe_comp_connect *_connect)
 		tr_err(&ipc_tr, "failed to connect internal buffer to sink %d", sink_id);
 		goto e_sink_connect;
 	}
+
 
 	ret = comp_bind(source, bu);
 	if (ret < 0)
@@ -624,7 +633,9 @@ int ipc4_pipeline_complete(struct ipc *ipc, uint32_t comp_id)
 	struct ipc_comp_dev *ipc_pipe;
 	int ret;
 
-	ipc_pipe = get_comp(ipc, COMP_TYPE_PIPELINE, comp_id);
+	ipc_pipe = ipc_get_pipeline_by_id(ipc, comp_id);
+	if (!ipc_pipe)
+		return -IPC4_INVALID_RESOURCE_ID;
 
 	/* Pass IPC to target core */
 	if (!cpu_is_me(ipc_pipe->core))
@@ -753,7 +764,7 @@ const struct comp_driver *ipc4_get_comp_drv(int module_id)
 
 struct comp_dev *ipc4_get_comp_dev(uint32_t comp_id)
 {
-	struct ipc_comp_dev *icd = get_comp(ipc_get(), COMP_TYPE_COMPONENT, comp_id);
+	struct ipc_comp_dev *icd = ipc_get_comp_by_id(ipc_get(), comp_id);
 
 	return icd ? icd->cd : NULL;
 }

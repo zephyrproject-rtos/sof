@@ -187,6 +187,24 @@ static bool is_any_ppl_active(void)
 	return false;
 }
 
+static struct ipc_comp_dev *pipeline_get_host_dev(struct ipc_comp_dev *ppl_icd)
+{
+	struct ipc_comp_dev *host_dev;
+	struct ipc *ipc = ipc_get();
+	int host_id;
+
+	if (ppl_icd->pipeline->source_comp->direction == SOF_IPC_STREAM_PLAYBACK)
+		host_id = ppl_icd->pipeline->source_comp->ipc_config.id;
+	else
+		host_id = ppl_icd->pipeline->sink_comp->ipc_config.id;
+
+	host_dev = ipc_get_comp_by_id(ipc, host_id);
+	if (!host_dev)
+		ipc_cmd_err(&ipc_tr, "comp host with ID %d not found", host_id);
+
+	return host_dev;
+}
+
 /* Ipc4 pipeline message <------> ipc3 pipeline message
  * RUNNING     <-------> TRIGGER START
  * INIT + PAUSED  <-------> PIPELINE COMPLETE
@@ -215,33 +233,111 @@ static bool is_any_ppl_active(void)
  *     ERROR Stop       EOS       |______\ SAVE
  *                                      /
  */
-int set_pipeline_state(struct ipc_comp_dev *ppl_icd, uint32_t cmd,
-		       bool *delayed)
+
+int ipc4_pipeline_prepare(struct ipc_comp_dev *ppl_icd, uint32_t cmd)
 {
 	struct ipc_comp_dev *host = NULL;
 	struct ipc *ipc = ipc_get();
 	int status;
+	int ret = 0;
+
+	status = ppl_icd->pipeline->status;
+	tr_dbg(&ipc_tr, "pipeline %d: initial state: %d, cmd: %d", ppl_icd->id,
+	       status, cmd);
+
+	switch (cmd) {
+	case SOF_IPC4_PIPELINE_STATE_RUNNING:
+		/* init params when pipeline is complete or reset */
+		switch (status) {
+		case COMP_STATE_ACTIVE:
+		case COMP_STATE_PAUSED:
+			/* No action needed */
+			break;
+		case COMP_STATE_READY:
+			host = pipeline_get_host_dev(ppl_icd);
+			if (!host)
+				return IPC4_INVALID_RESOURCE_ID;
+
+			tr_dbg(&ipc_tr, "pipeline %d: set params", ppl_icd->id);
+			ret = ipc4_pcm_params(host);
+			if (ret < 0)
+				return IPC4_INVALID_REQUEST;
+			break;
+		default:
+			ipc_cmd_err(&ipc_tr,
+				    "pipeline %d: Invalid state for RUNNING: %d",
+				    ppl_icd->id, status);
+			return IPC4_INVALID_REQUEST;
+		}
+		break;
+	case SOF_IPC4_PIPELINE_STATE_RESET:
+		switch (status) {
+		case COMP_STATE_INIT:
+			tr_dbg(&ipc_tr, "pipeline %d: reset from init", ppl_icd->id);
+			ret = ipc4_pipeline_complete(ipc, ppl_icd->id);
+			if (ret < 0)
+				ret = IPC4_INVALID_REQUEST;
+
+			break;
+		case COMP_STATE_READY:
+		case COMP_STATE_ACTIVE:
+		case COMP_STATE_PAUSED:
+			/* No action needed */
+			break;
+		default:
+			ipc_cmd_err(&ipc_tr,
+				    "pipeline %d: Invalid state for RESET: %d",
+				    ppl_icd->id, status);
+			return IPC4_INVALID_REQUEST;
+		}
+
+		break;
+	case SOF_IPC4_PIPELINE_STATE_PAUSED:
+		switch (status) {
+		case COMP_STATE_INIT:
+			tr_dbg(&ipc_tr, "pipeline %d: pause from init", ppl_icd->id);
+			ret = ipc4_pipeline_complete(ipc, ppl_icd->id);
+			if (ret < 0)
+				ret = IPC4_INVALID_REQUEST;
+
+			break;
+		default:
+			/* No action needed */
+			break;
+		}
+
+		break;
+	/* special case- TODO */
+	case SOF_IPC4_PIPELINE_STATE_EOS:
+		if (status != COMP_STATE_ACTIVE)
+			return IPC4_INVALID_REQUEST;
+	case SOF_IPC4_PIPELINE_STATE_SAVED:
+	case SOF_IPC4_PIPELINE_STATE_ERROR_STOP:
+	default:
+		ipc_cmd_err(&ipc_tr, "pipeline %d: unsupported trigger cmd: %d",
+			    ppl_icd->id, cmd);
+		return IPC4_INVALID_REQUEST;
+	}
+
+	return ret;
+}
+
+int ipc4_pipeline_trigger(struct ipc_comp_dev *ppl_icd, uint32_t cmd, bool *delayed)
+{
+	struct ipc_comp_dev *host;
+	int status;
 	int ret;
 
 	status = ppl_icd->pipeline->status;
-	tr_dbg(&ipc_tr, "ipc4 set pipeline %d cmd state %x: from state %x", ppl_icd->id,
-	       cmd, status);
+	tr_dbg(&ipc_tr, "pipeline %d: initial state: %d, cmd: %d", ppl_icd->id,
+	       status, cmd);
 
-	/* source & sink components are set when pipeline is set to COMP_STATE_INIT */
-	if (status != COMP_STATE_INIT) {
-		int host_id;
+	if (status == COMP_STATE_INIT)
+		return 0;
 
-		if (ppl_icd->pipeline->source_comp->direction == SOF_IPC_STREAM_PLAYBACK)
-			host_id = ppl_icd->pipeline->source_comp->ipc_config.id;
-		else
-			host_id = ppl_icd->pipeline->sink_comp->ipc_config.id;
-
-		host = ipc_get_comp_by_id(ipc, host_id);
-		if (!host) {
-			ipc_cmd_err(&ipc_tr, "ipc: comp host with ID %d not found", host_id);
-			return IPC4_INVALID_RESOURCE_ID;
-		}
-	}
+	host = pipeline_get_host_dev(ppl_icd);
+	if (!host)
+		return IPC4_INVALID_RESOURCE_ID;
 
 	switch (cmd) {
 	case SOF_IPC4_PIPELINE_STATE_RUNNING:
@@ -251,109 +347,68 @@ int set_pipeline_state(struct ipc_comp_dev *ppl_icd, uint32_t cmd,
 			/* nothing to do if the pipeline is already running */
 			return 0;
 		case COMP_STATE_READY:
+		case COMP_STATE_PREPARE:
 			cmd = COMP_TRIGGER_PRE_START;
-
-			tr_dbg(&ipc_tr, "ipc4: set pipeline %d new cmd state %x: params",
-			       ppl_icd->id, cmd);
-			ret = ipc4_pcm_params(host);
-			if (ret < 0)
-				return IPC4_INVALID_REQUEST;
 			break;
 		case COMP_STATE_PAUSED:
 			cmd = COMP_TRIGGER_PRE_RELEASE;
 			break;
 		default:
-			ipc_cmd_err(&ipc_tr, "ipc: current status %d", status);
+			ipc_cmd_err(&ipc_tr,
+				    "pipeline %d: Invalid state for RUNNING: %d",
+				    ppl_icd->id, status);
 			return IPC4_INVALID_REQUEST;
 		}
 		break;
 	case SOF_IPC4_PIPELINE_STATE_RESET:
 		switch (status) {
-		case COMP_STATE_INIT:
-			tr_dbg(&ipc_tr, "ipc4: set pipeline %d new cmd state %x: reset from init",
-			       ppl_icd->id, cmd);
-			ret = ipc4_pipeline_complete(ipc, ppl_icd->id);
-			if (ret < 0)
-				ret = IPC4_INVALID_REQUEST;
-
-			return ret;
-		case COMP_STATE_READY:
-			/* initialized -> pause -> reset */
-			return 0;
 		case COMP_STATE_ACTIVE:
 		case COMP_STATE_PAUSED:
-			tr_dbg(&ipc_tr, "ipc4: set pipeline %d new cmd state %x: pause from reset",
-			       ppl_icd->id, cmd);
-			ret = pipeline_trigger(host->cd->pipeline, host->cd, COMP_TRIGGER_STOP);
-			if (ret < 0) {
-				ipc_cmd_err(&ipc_tr, "ipc: comp %d trigger 0x%x failed %d",
-					    ppl_icd->id, cmd, ret);
-				return IPC4_PIPELINE_STATE_NOT_SET;
-			}
-			if (ret == PPL_STATUS_SCHEDULED)
-				*delayed = true;
+			cmd = COMP_TRIGGER_STOP;
 			break;
 		default:
-			ipc_cmd_err(&ipc_tr, "ipc: invalid status %d for RESET", status);
-			return IPC4_INVALID_REQUEST;
+			return 0;
 		}
-
-		/*
-		 * reset the pipeline components if STOP trigger is executed in the same thread.
-		 * Otherwise, the pipeline will be reset after the STOP trigger has finished
-		 * executing in the pipeline task.
-		 */
-		if (!*delayed) {
-			tr_dbg(&ipc_tr, "ipc4: set pipeline %d new cmd state %x: delayed reset",
-			       ppl_icd->id, cmd);
-			ret = pipeline_reset(host->cd->pipeline, host->cd);
-			if (ret < 0)
-				ret = IPC4_INVALID_REQUEST;
-		}
-
-		return ret;
+		break;
 	case SOF_IPC4_PIPELINE_STATE_PAUSED:
 		switch (status) {
 		case COMP_STATE_INIT:
-			tr_dbg(&ipc_tr, "ipc4: set pipeline %d new cmd state %x: pause from init",
-			       ppl_icd->id, cmd);
-			ret = ipc4_pipeline_complete(ipc, ppl_icd->id);
-			if (ret < 0)
-				ret = IPC4_INVALID_REQUEST;
-
-			return ret;
 		case COMP_STATE_READY:
 		case COMP_STATE_PAUSED:
-			/* return if pipeline is not active yet or if it is already paused */
 			return 0;
+		default:
+			cmd = COMP_TRIGGER_PAUSE;
+			break;
 		}
 
-		cmd = COMP_TRIGGER_PAUSE;
 		break;
-	/* special case- TODO */
-	case SOF_IPC4_PIPELINE_STATE_EOS:
-		if (status != COMP_STATE_ACTIVE)
-			return IPC4_INVALID_REQUEST;
-	case SOF_IPC4_PIPELINE_STATE_SAVED:
-	case SOF_IPC4_PIPELINE_STATE_ERROR_STOP:
 	default:
-		ipc_cmd_err(&ipc_tr, "ipc: unsupported trigger cmd 0x%x", cmd);
+		ipc_cmd_err(&ipc_tr, "pipeline %d: unsupported trigger cmd: %d",
+			    ppl_icd->id, cmd);
 		return IPC4_INVALID_REQUEST;
 	}
-
-	tr_dbg(&ipc_tr, "ipc4: set pipeline %d new cmd state %x: from state %x", ppl_icd->id,
-	       cmd, status);
 
 	/* trigger the component */
 	ret = pipeline_trigger(host->cd->pipeline, host->cd, cmd);
 	if (ret < 0) {
-		ipc_cmd_err(&ipc_tr, "ipc: comp %d trigger 0x%x failed %d", ppl_icd->id, cmd, ret);
+		ipc_cmd_err(&ipc_tr, "pipeline %d: trigger cmd %d failed with: %d",
+			    ppl_icd->id, cmd, ret);
 		ret = IPC4_PIPELINE_STATE_NOT_SET;
 	} else if (ret == PPL_STATUS_SCHEDULED) {
-		tr_dbg(&ipc_tr, "ipc4: set pipeline %d new cmd state %x: trigger delayed",
+		tr_dbg(&ipc_tr, "pipeline %d: trigger cmd %d is delayed",
 		       ppl_icd->id, cmd);
 		*delayed = true;
 		ret = 0;
+	} else if (cmd == COMP_TRIGGER_STOP) {
+		/*
+		 * reset the pipeline components if STOP trigger is executed in
+		 * the same thread.
+		 * Otherwise, the pipeline will be reset after the STOP trigger
+		 * has finished executing in the pipeline task.
+		 */
+		ret = pipeline_reset(host->cd->pipeline, host->cd);
+		if (ret < 0)
+			ret = IPC4_INVALID_REQUEST;
 	}
 
 	return ret;
@@ -460,6 +515,38 @@ static int ipc4_set_pipeline_state(struct ipc4_message_request *ipc4)
 		}
 	}
 
+	/* Run the prepare phase on the pipelines */
+	for (i = 0; i < ppl_count; i++) {
+		ppl_icd = ipc_get_comp_by_ppl_id(ipc, COMP_TYPE_PIPELINE, ppl_id[i]);
+		if (!ppl_icd) {
+			ipc_cmd_err(&ipc_tr, "ipc: comp %d not found", ppl_id[i]);
+			return IPC4_INVALID_RESOURCE_ID;
+		}
+
+		/* Pass IPC to target core
+		 * or use idc if more than one core used
+		 */
+		if (!cpu_is_me(ppl_icd->core)) {
+			if (use_idc) {
+				struct idc_msg msg = { IDC_MSG_PPL_STATE,
+					IDC_MSG_PPL_STATE_EXT(ppl_id[i],
+							      IDC_PPL_STATE_PHASE_PREPARE),
+					ppl_icd->core,
+					sizeof(cmd), &cmd, };
+
+				ret = idc_send_msg(&msg, IDC_BLOCKING);
+			} else {
+				return ipc4_process_on_core(ppl_icd->core, false);
+			}
+		} else {
+			ret = ipc4_pipeline_prepare(ppl_icd, cmd);
+		}
+
+		if (ret != 0)
+			return ret;
+	}
+
+	/* Run the trigger phase on the pipelines */
 	for (i = 0; i < ppl_count; i++) {
 		bool delayed = false;
 
@@ -475,7 +562,9 @@ static int ipc4_set_pipeline_state(struct ipc4_message_request *ipc4)
 		if (!cpu_is_me(ppl_icd->core)) {
 			if (use_idc) {
 				struct idc_msg msg = { IDC_MSG_PPL_STATE,
-					IDC_MSG_PPL_STATE_EXT(ppl_id[i]), ppl_icd->core,
+					IDC_MSG_PPL_STATE_EXT(ppl_id[i],
+							      IDC_PPL_STATE_PHASE_TRIGGER),
+					ppl_icd->core,
 					sizeof(cmd), &cmd, };
 
 				ret = idc_send_msg(&msg, IDC_BLOCKING);
@@ -484,7 +573,7 @@ static int ipc4_set_pipeline_state(struct ipc4_message_request *ipc4)
 			}
 		} else {
 			ipc_compound_pre_start(state.primary.r.type);
-			ret = set_pipeline_state(ppl_icd, cmd, &delayed);
+			ret = ipc4_pipeline_trigger(ppl_icd, cmd, &delayed);
 			ipc_compound_post_start(state.primary.r.type, ret, delayed);
 		}
 
@@ -499,15 +588,16 @@ static int ipc4_set_pipeline_state(struct ipc4_message_request *ipc4)
 static int ipc4_load_library(struct ipc4_message_request *ipc4)
 {
 	struct ipc4_module_load_library library;
-	int ret = IPC4_UNAVAILABLE;
+	int ret;
 
 	library.header.dat = ipc4->primary.dat;
-	library.data.dat = ipc4->extension.dat;
 
-	ret = lib_manager_load_library(library.header.r.dma_id, library.header.r.lib_id);
-	tr_info(&ipc_tr, "ipc: ipc4_load_library %d", ret);
+	ret = lib_manager_load_library(library.header.r.dma_id, library.header.r.lib_id,
+				       ipc4->primary.r.type);
+	if (ret != 0)
+		return (ret == -EINVAL) ? IPC4_ERROR_INVALID_PARAM : IPC4_FAILURE;
 
-	return ret;
+	return IPC4_SUCCESS;
 }
 #endif
 
@@ -652,6 +742,9 @@ static int ipc4_process_glb_message(struct ipc4_message_request *ipc4)
 	/* Loads library (using Code Load or HD/A Host Output DMA) */
 #ifdef CONFIG_LIBRARY_MANAGER
 	case SOF_IPC4_GLB_LOAD_LIBRARY:
+		ret = ipc4_load_library(ipc4);
+		break;
+	case SOF_IPC4_GLB_LOAD_LIBRARY_PREPARE:
 		ret = ipc4_load_library(ipc4);
 		break;
 #endif

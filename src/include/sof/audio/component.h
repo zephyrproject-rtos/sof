@@ -251,11 +251,12 @@ enum {
 		  (uint32_t)((pcd)->cpu_delta_peak))
 
 #define comp_perf_avg_info(pcd, comp_p)					\
-	comp_info(comp_p, "perf comp_copy samples %u period %u cpu avg %u peak %u",\
+	comp_info(comp_p, "perf comp_copy samples %u period %u cpu avg %u peak %u %u",\
 		  (uint32_t)((comp_p)->frames),            \
 		  (uint32_t)((comp_p)->period),			    \
 		  (uint32_t)((pcd)->cpu_delta_sum),			\
-		  (uint32_t)((pcd)->cpu_delta_peak))
+		  (uint32_t)((pcd)->cpu_delta_peak),			\
+		  (uint32_t)((pcd)->peak_mcps_period_cnt))
 
 /** @}*/
 
@@ -569,15 +570,6 @@ struct comp_dev {
 	uint32_t frames;	   /**< number of frames we copy to sink */
 	struct pipeline *pipeline; /**< pipeline we belong to */
 
-	uint32_t min_sink_bytes;   /**< min free sink buffer size measured in
-				     *  bytes required to run component's
-				     *  processing
-				     */
-	uint32_t min_source_bytes; /**< amount of data measured in bytes
-				     *  available at source buffer required
-				     *  to run component's processing
-				     */
-
 	struct task *task;	/**< component's processing task used
 				  *  1) for components running on different core
 				  *    than the rest of the pipeline
@@ -709,20 +701,20 @@ static inline struct comp_dev *comp_alloc(const struct comp_driver *drv,
 
 /* declared modules */
 void sys_comp_asrc_init(void);
-void sys_comp_crossover_init(void);
 void sys_comp_dai_init(void);
 void sys_comp_dcblock_init(void);
 void sys_comp_host_init(void);
 void sys_comp_kpb_init(void);
-void sys_comp_multiband_drc_init(void);
 void sys_comp_selector_init(void);
 
+void sys_comp_module_crossover_interface_init(void);
 void sys_comp_module_demux_interface_init(void);
 void sys_comp_module_drc_interface_init(void);
 void sys_comp_module_eq_fir_interface_init(void);
 void sys_comp_module_eq_iir_interface_init(void);
 void sys_comp_module_mfcc_interface_init(void);
 void sys_comp_module_mixer_interface_init(void);
+void sys_comp_module_multiband_drc_interface_init(void);
 void sys_comp_module_mux_interface_init(void);
 void sys_comp_module_src_interface_init(void);
 void sys_comp_module_tdfb_interface_init(void);

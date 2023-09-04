@@ -30,6 +30,9 @@ DEBUG_START
 #
 ifdef(`2CH_2WAY', `ifdef(`4CH_PASSTHROUGH', `fatal_error(note: 2CH_2WAY and 4CH_PASSTHROUGH are mutually exclusive)')')
 
+ifdef(`USE_DA7219',`define(HEADPHONE, `DA7219')',`define(HEADPHONE, `RT5682')')
+ifdef(`USE_DA7219',`define(MCLK_RATE, `24576000')',`define(MCLK_RATE, `19200000')')
+
 #
 # Define the demux configure
 #
@@ -210,11 +213,14 @@ PIPELINE_PCM_ADD(
 undefine(`ENDPOINT_NAME')')
 
 ifdef(`NO_HEADPHONE',`',`
+# define Waves integration on Headphones = WAVES && !WAVES_SPK_ONLY
+ifdef(`WAVES', `ifdef(`WAVES_SPK_ONLY', `', `define(`WAVES_HEADPHONE')')', `')
+
 # Low Latency playback pipeline 2 on PCM 1 using max 2 channels of s24le.
 # Schedule 48 frames per 1000us deadline with priority 0 on core 0
 define(`ENDPOINT_NAME', `Headphones')
 PIPELINE_PCM_ADD(
-	ifdef(`WAVES', sof/pipe-waves-codec-playback.m4, sof/pipe-volume-playback.m4),
+	ifdef(`WAVES_HEADPHONE', sof/pipe-waves-codec-playback.m4, sof/pipe-volume-playback.m4),
 	2, 1, 2, s32le,
 	1000, 0, 0,
 	48000, 48000, 48000)
@@ -423,43 +429,43 @@ ifdef(`NO_AMP',`',`
 DAI_CONFIG(SSP, SPK_SSP_INDEX, SPK_BE_ID, SPK_SSP_NAME,
 ifelse(
 	CODEC, `MAX98357A', `
-	SSP_CONFIG(I2S, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
+	SSP_CONFIG(I2S, SSP_CLOCK(mclk, MCLK_RATE, codec_mclk_in),
 		SSP_CLOCK(bclk, 1536000, codec_slave),
 		SSP_CLOCK(fsync, 48000, codec_slave),
 		SSP_TDM(2, 16, 3, 3),
 		SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 16)))',
 	CODEC, `MAX98360A', `
-	SSP_CONFIG(I2S, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
+	SSP_CONFIG(I2S, SSP_CLOCK(mclk, MCLK_RATE, codec_mclk_in),
 		SSP_CLOCK(bclk, 3072000, codec_slave),
 		SSP_CLOCK(fsync, 48000, codec_slave),
 		SSP_TDM(2, 32, 3, 3),
 		SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 32)))',
 	CODEC, `MAX98360A_TDM', `
-	SSP_CONFIG(DSP_A, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
+	SSP_CONFIG(DSP_A, SSP_CLOCK(mclk, MCLK_RATE, codec_mclk_in),
 		SSP_CLOCK(bclk, 12288000, codec_slave),
 		SSP_CLOCK(fsync, 48000, codec_slave),
 		SSP_TDM(8, 32, 15, 15),
 		SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 32)))',
 	CODEC, `RT1011', `
-	SSP_CONFIG(DSP_A, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
+	SSP_CONFIG(DSP_A, SSP_CLOCK(mclk, MCLK_RATE, codec_mclk_in),
 		SSP_CLOCK(bclk, 4800000, codec_slave),
 		SSP_CLOCK(fsync, 48000, codec_slave),
 		SSP_TDM(4, 25, 3, 15),
 		SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 24)))',
 	CODEC, `MAX98390', `
-	SSP_CONFIG(DSP_B, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
+	SSP_CONFIG(DSP_B, SSP_CLOCK(mclk, MCLK_RATE, codec_mclk_in),
 		SSP_CLOCK(bclk, 6144000, codec_slave),
 		SSP_CLOCK(fsync, 48000, codec_slave),
 		SSP_TDM(4, 32, 3, 15),
 		SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 32)))',
 	CODEC, `RT1019', `
-	SSP_CONFIG(I2S, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
+	SSP_CONFIG(I2S, SSP_CLOCK(mclk, MCLK_RATE, codec_mclk_in),
                 SSP_CLOCK(bclk, 3072000, codec_slave),
                 SSP_CLOCK(fsync, 48000, codec_slave),
                 SSP_TDM(2, 32, 3, 3),
                 SSP_CONFIG_DATA(SSP, SPK_SSP_INDEX, 24)))',
 	CODEC, `CS35L41', `
-	SSP_CONFIG(DSP_A, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
+	SSP_CONFIG(DSP_A, SSP_CLOCK(mclk, MCLK_RATE, codec_mclk_in),
 		SSP_CLOCK(bclk, 6144000, codec_slave),
 		SSP_CLOCK(fsync, 48000, codec_slave),
 		SSP_TDM(4, 32, 3, 15),
@@ -469,11 +475,20 @@ ifelse(
 ifdef(`NO_HEADPHONE',`',`
 # SSP 0 (ID: BOARD_HP_BE_ID)
 DAI_CONFIG(SSP, 0, BOARD_HP_BE_ID, SSP0-Codec,
-	SSP_CONFIG(I2S, SSP_CLOCK(mclk, 19200000, codec_mclk_in),
+ifelse(
+	HEADPHONE, `DA7219', `
+	SSP_CONFIG(I2S, SSP_CLOCK(mclk, MCLK_RATE, codec_mclk_in),
+		SSP_CLOCK(bclk, 3072000, codec_slave),
+		SSP_CLOCK(fsync, 48000, codec_slave),
+		SSP_TDM(2, 32, 3, 3),
+		SSP_CONFIG_DATA(SSP, 0, 24)))',
+	HEADPHONE, `RT5682', `
+	SSP_CONFIG(I2S, SSP_CLOCK(mclk, MCLK_RATE, codec_mclk_in),
 		SSP_CLOCK(bclk, 2400000, codec_slave),
 		SSP_CLOCK(fsync, 48000, codec_slave),
 		SSP_TDM(2, 25, 3, 3),
-		SSP_CONFIG_DATA(SSP, 0, 24, 0, 0, 0, SSP_CC_BCLK_ES)))')
+		SSP_CONFIG_DATA(SSP, 0, 24, 0, 0, 0, SSP_CC_BCLK_ES)))',
+	)')
 
 # 4 HDMI/DP outputs (ID: 3,4,5,6)
 DAI_CONFIG(HDA, 0, BOARD_HDMI_BE_ID_BASE, iDisp1,

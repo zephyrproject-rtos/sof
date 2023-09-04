@@ -4,12 +4,13 @@
 //
 // Author: Sebastiano Carlucci <scarlucci@google.com>
 
-#include <stdint.h>
-#include <sof/audio/format.h>
+#include <ipc/stream.h>
+#include <sof/audio/module_adapter/module/module_interface.h>
 #include <sof/audio/component.h>
-#include <sof/audio/format.h>
 #include <sof/audio/crossover/crossover.h>
+#include <sof/audio/format.h>
 #include <sof/math/iir_df2t.h>
+#include <stdint.h>
 
 /*
  * \brief Splits x into two based on the coefficients set in the lp
@@ -86,13 +87,14 @@ static void crossover_generic_split_4way(int32_t in,
 }
 
 #if CONFIG_FORMAT_S16LE
-static void crossover_s16_default_pass(const struct comp_dev *dev,
-				       const struct comp_buffer __sparse_cache *source,
-				       struct comp_buffer __sparse_cache *sinks[],
+static void crossover_s16_default_pass(struct comp_data *cd,
+				       struct input_stream_buffer *bsource,
+				       struct output_stream_buffer **bsinks,
 				       int32_t num_sinks,
 				       uint32_t frames)
 {
-	const struct audio_stream __sparse_cache *source_stream = &source->stream;
+	const struct audio_stream __sparse_cache *sink_stream;
+	const struct audio_stream __sparse_cache *source_stream = bsource->data;
 	int16_t *x;
 	int32_t *y;
 	int i, j;
@@ -101,9 +103,11 @@ static void crossover_s16_default_pass(const struct comp_dev *dev,
 	for (i = 0; i < n; i++) {
 		x = audio_stream_read_frag_s16(source_stream, i);
 		for (j = 0; j < num_sinks; j++) {
-			if (!sinks[j])
+			if (!bsinks[j])
 				continue;
-			y = audio_stream_write_frag_s16((&sinks[j]->stream), i);
+
+			sink_stream = bsinks[j]->data;
+			y = audio_stream_write_frag_s16(sink_stream, i);
 			*y = *x;
 		}
 	}
@@ -111,13 +115,14 @@ static void crossover_s16_default_pass(const struct comp_dev *dev,
 #endif /* CONFIG_FORMAT_S16LE */
 
 #if CONFIG_FORMAT_S24LE || CONFIG_FORMAT_S32LE
-static void crossover_s32_default_pass(const struct comp_dev *dev,
-				       const struct comp_buffer __sparse_cache *source,
-				       struct comp_buffer __sparse_cache *sinks[],
+static void crossover_s32_default_pass(struct comp_data *cd,
+				       struct input_stream_buffer *bsource,
+				       struct output_stream_buffer **bsinks,
 				       int32_t num_sinks,
 				       uint32_t frames)
 {
-	const struct audio_stream __sparse_cache *source_stream = &source->stream;
+	const struct audio_stream __sparse_cache *sink_stream;
+	const struct audio_stream __sparse_cache *source_stream = bsource->data;
 	int32_t *x, *y;
 	int i, j;
 	int n = audio_stream_get_channels(source_stream) * frames;
@@ -125,9 +130,11 @@ static void crossover_s32_default_pass(const struct comp_dev *dev,
 	for (i = 0; i < n; i++) {
 		x = audio_stream_read_frag_s32(source_stream, i);
 		for (j = 0; j < num_sinks; j++) {
-			if (!sinks[j])
+			if (!bsinks[j])
 				continue;
-			y = audio_stream_write_frag_s32((&sinks[j]->stream), i);
+
+			sink_stream = bsinks[j]->data;
+			y = audio_stream_write_frag_s32(sink_stream, i);
 			*y = *x;
 		}
 	}
@@ -135,15 +142,14 @@ static void crossover_s32_default_pass(const struct comp_dev *dev,
 #endif /* CONFIG_FORMAT_S24LE || CONFIG_FORMAT_S32LE */
 
 #if CONFIG_FORMAT_S16LE
-static void crossover_s16_default(const struct comp_dev *dev,
-				  const struct comp_buffer __sparse_cache *source,
-				  struct comp_buffer __sparse_cache *sinks[],
+static void crossover_s16_default(struct comp_data *cd,
+				  struct input_stream_buffer *bsource,
+				  struct output_stream_buffer **bsinks,
 				  int32_t num_sinks,
 				  uint32_t frames)
 {
-	struct comp_data *cd = comp_get_drvdata(dev);
 	struct crossover_state *state;
-	const struct audio_stream __sparse_cache *source_stream = &source->stream;
+	const struct audio_stream __sparse_cache *source_stream = bsource->data;
 	struct audio_stream __sparse_cache *sink_stream;
 	int16_t *x, *y;
 	int ch, i, j;
@@ -159,9 +165,9 @@ static void crossover_s16_default(const struct comp_dev *dev,
 			cd->crossover_split(*x << 16, out, state);
 
 			for (j = 0; j < num_sinks; j++) {
-				if (!sinks[j])
+				if (!bsinks[j])
 					continue;
-				sink_stream = &sinks[j]->stream;
+				sink_stream = bsinks[j]->data;
 				y = audio_stream_write_frag_s16(sink_stream,
 								idx);
 				*y = sat_int16(Q_SHIFT_RND(out[j], 31, 15));
@@ -174,15 +180,14 @@ static void crossover_s16_default(const struct comp_dev *dev,
 #endif /* CONFIG_FORMAT_S16LE */
 
 #if CONFIG_FORMAT_S24LE
-static void crossover_s24_default(const struct comp_dev *dev,
-				  const struct comp_buffer __sparse_cache *source,
-				  struct comp_buffer __sparse_cache *sinks[],
+static void crossover_s24_default(struct comp_data *cd,
+				  struct input_stream_buffer *bsource,
+				  struct output_stream_buffer **bsinks,
 				  int32_t num_sinks,
 				  uint32_t frames)
 {
-	struct comp_data *cd = comp_get_drvdata(dev);
 	struct crossover_state *state;
-	const struct audio_stream __sparse_cache *source_stream = &source->stream;
+	const struct audio_stream __sparse_cache *source_stream = bsource->data;
 	struct audio_stream __sparse_cache *sink_stream;
 	int32_t *x, *y;
 	int ch, i, j;
@@ -198,9 +203,9 @@ static void crossover_s24_default(const struct comp_dev *dev,
 			cd->crossover_split(*x << 8, out, state);
 
 			for (j = 0; j < num_sinks; j++) {
-				if (!sinks[j])
+				if (!bsinks[j])
 					continue;
-				sink_stream = &sinks[j]->stream;
+				sink_stream = bsinks[j]->data;
 				y = audio_stream_write_frag_s32(sink_stream,
 								idx);
 				*y = sat_int24(Q_SHIFT_RND(out[j], 31, 23));
@@ -213,15 +218,14 @@ static void crossover_s24_default(const struct comp_dev *dev,
 #endif /* CONFIG_FORMAT_S24LE */
 
 #if CONFIG_FORMAT_S32LE
-static void crossover_s32_default(const struct comp_dev *dev,
-				  const struct comp_buffer __sparse_cache *source,
-				  struct comp_buffer __sparse_cache *sinks[],
+static void crossover_s32_default(struct comp_data *cd,
+				  struct input_stream_buffer *bsource,
+				  struct output_stream_buffer **bsinks,
 				  int32_t num_sinks,
 				  uint32_t frames)
 {
-	struct comp_data *cd = comp_get_drvdata(dev);
 	struct crossover_state *state;
-	const struct audio_stream __sparse_cache *source_stream = &source->stream;
+	const struct audio_stream __sparse_cache *source_stream = bsource->data;
 	struct audio_stream __sparse_cache *sink_stream;
 	int32_t *x, *y;
 	int ch, i, j;
@@ -231,15 +235,15 @@ static void crossover_s32_default(const struct comp_dev *dev,
 
 	for (ch = 0; ch < nch; ch++) {
 		idx = ch;
-		state = &cd->state[0];
+		state = &cd->state[ch];
 		for (i = 0; i < frames; i++) {
 			x = audio_stream_read_frag_s32(source_stream, idx);
 			cd->crossover_split(*x, out, state);
 
 			for (j = 0; j < num_sinks; j++) {
-				if (!sinks[j])
+				if (!bsinks[j])
 					continue;
-				sink_stream = &sinks[j]->stream;
+				sink_stream = bsinks[j]->data;
 				y = audio_stream_write_frag_s32(sink_stream,
 								idx);
 				*y = out[j];

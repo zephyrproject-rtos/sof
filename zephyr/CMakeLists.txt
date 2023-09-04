@@ -118,89 +118,26 @@ zephyr_include_directories(
 if (CONFIG_SOC_SERIES_INTEL_CAVS_V25)
 
 	# Driver sources
-	if (CONFIG_IPC_MAJOR_4 AND CONFIG_ZEPHYR_NATIVE_DRIVERS)
 	zephyr_library_sources(
 		${SOF_IPC_PATH}/ipc-zephyr.c
 	)
-	else()
-	zephyr_library_sources(
-		${SOF_DRIVERS_PATH}/intel/cavs/ipc.c
-	)
-	endif()
 
 	zephyr_library_sources_ifdef(CONFIG_INTEL_HDA
 		${SOF_DRIVERS_PATH}/intel/hda/hda-dma.c
 	)
 
-	if (NOT CONFIG_ZEPHYR_NATIVE_DRIVERS)
-	zephyr_library_sources(
-		${SOF_DRIVERS_PATH}/intel/cavs/timestamp.c
-	)
-
-	zephyr_library_sources_ifdef(CONFIG_INTEL_HDA
-		${SOF_DRIVERS_PATH}/intel/hda/hda.c
-	)
-
-	zephyr_library_sources_ifdef(CONFIG_INTEL_MN
-		${SOF_DRIVERS_PATH}/intel/ssp/mn.c
-	)
-
-	zephyr_library_sources_ifdef(CONFIG_INTEL_SSP
-		${SOF_DRIVERS_PATH}/intel/ssp/ssp.c
-	)
-
-	zephyr_library_sources_ifdef(CONFIG_INTEL_ALH
-		${SOF_DRIVERS_PATH}/intel/alh.c
-	)
-
-	zephyr_library_sources_ifdef(CONFIG_INTEL_DMIC
-		${SOF_DRIVERS_PATH}/intel/dmic/dmic.c
-	)
-
-	zephyr_library_sources_ifdef(CONFIG_INTEL_DMIC_TPLG_PARAMS
-		${SOF_DRIVERS_PATH}/intel/dmic/dmic_computed.c
-	)
-
-	zephyr_library_sources_ifdef(CONFIG_INTEL_DMIC_NHLT
-		${SOF_DRIVERS_PATH}/intel/dmic/dmic_nhlt.c
-	)
-
-	zephyr_library_sources(
-		${SOF_PLATFORM_PATH}/intel/cavs/lib/dai.c
-	)
-	endif()
-
 	# Platform sources
-	if (NOT CONFIG_ZEPHYR_NATIVE_DRIVERS)
 	zephyr_library_sources(
 		${SOF_PLATFORM_PATH}/intel/cavs/platform.c
-		${SOF_PLATFORM_PATH}/intel/cavs/lib/mem_window.c
-		${SOF_PLATFORM_PATH}/tigerlake/lib/clk.c
-		${SOF_PLATFORM_PATH}/intel/cavs/lib/power_down.S
-		${SOF_PLATFORM_PATH}/intel/cavs/lib/pm_runtime.c
-		${SOF_PLATFORM_PATH}/intel/cavs/lib/pm_memory.c
-		${SOF_PLATFORM_PATH}/intel/cavs/lib/clk.c
-		${SOF_PLATFORM_PATH}/intel/cavs/lib/dma.c
-	)
-	set_source_files_properties(${SOF_PLATFORM_PATH}/intel/cavs/lib/power_down.S PROPERTIES COMPILE_FLAGS -DASSEMBLY)
-	else()
-	zephyr_library_sources(
-		${SOF_PLATFORM_PATH}/intel/cavs/platform.c
-		${SOF_PLATFORM_PATH}/intel/cavs/lib/mem_window.c
 		${SOF_PLATFORM_PATH}/tigerlake/lib/clk.c
 		lib/pm_runtime.c
 		lib/clk.c
 		lib/dma.c
 	)
-	endif()
 
 	# SOF core infrastructure - runs on top of Zephyr
 	zephyr_library_sources(
 		${SOF_SRC_PATH}/schedule/zephyr_ll.c
-	)
-
-	zephyr_library_sources_ifdef(CONFIG_CAVS_LPS
-		${SOF_PLATFORM_PATH}/intel/cavs/lps_wait.c
 	)
 
 	set(PLATFORM "tigerlake")
@@ -560,15 +497,29 @@ zephyr_library_sources_ifdef(CONFIG_SAMPLE_KEYPHRASE
 	${SOF_SAMPLES_PATH}/audio/detect_test.c
 )
 
-zephyr_library_sources_ifdef(CONFIG_COMP_VOLUME
-	${SOF_AUDIO_MODULES_PATH}/volume/volume_hifi4.c
-	${SOF_AUDIO_MODULES_PATH}/volume/volume_hifi3.c
-	${SOF_AUDIO_MODULES_PATH}/volume/volume_generic.c
-	${SOF_AUDIO_MODULES_PATH}/volume/volume_hifi4_with_peakvol.c
-	${SOF_AUDIO_MODULES_PATH}/volume/volume_hifi3_with_peakvol.c
-	${SOF_AUDIO_MODULES_PATH}/volume/volume_generic_with_peakvol.c
-	${SOF_AUDIO_MODULES_PATH}/volume/volume.c
+if(CONFIG_IPC_MAJOR_3)
+	zephyr_library_sources_ifdef(CONFIG_COMP_VOLUME
+		${SOF_AUDIO_PATH}/volume/volume_hifi4.c
+		${SOF_AUDIO_PATH}/volume/volume_hifi3.c
+		${SOF_AUDIO_PATH}/volume/volume_generic.c
+		${SOF_AUDIO_PATH}/volume/volume_hifi4_with_peakvol.c
+		${SOF_AUDIO_PATH}/volume/volume_hifi3_with_peakvol.c
+		${SOF_AUDIO_PATH}/volume/volume_generic_with_peakvol.c
+		${SOF_AUDIO_PATH}/volume/volume.c
+		${SOF_AUDIO_PATH}/volume/volume_ipc3.c
 )
+elseif(CONFIG_IPC_MAJOR_4)
+	zephyr_library_sources_ifdef(CONFIG_COMP_VOLUME
+		${SOF_AUDIO_PATH}/volume/volume_hifi4.c
+		${SOF_AUDIO_PATH}/volume/volume_hifi3.c
+		${SOF_AUDIO_PATH}/volume/volume_generic.c
+		${SOF_AUDIO_PATH}/volume/volume_hifi4_with_peakvol.c
+		${SOF_AUDIO_PATH}/volume/volume_hifi3_with_peakvol.c
+		${SOF_AUDIO_PATH}/volume/volume_generic_with_peakvol.c
+		${SOF_AUDIO_PATH}/volume/volume.c
+		${SOF_AUDIO_PATH}/volume/volume_ipc4.c
+)
+endif()
 
 zephyr_library_sources_ifdef(CONFIG_COMP_MODULE_ADAPTER
 	${SOF_AUDIO_PATH}/module_adapter/module_adapter.c
@@ -724,7 +675,7 @@ zephyr_library_sources_ifdef(CONFIG_SQRT_FIXED
 
 zephyr_library_sources_ifdef(CONFIG_MATH_EXP
 	${SOF_MATH_PATH}/exp_fcn.c
-	${SOF_MATH_PATH}/exp_fcn_hifi4.c
+	${SOF_MATH_PATH}/exp_fcn_hifi.c
 )
 
 zephyr_library_sources_ifdef(CONFIG_COMP_UP_DOWN_MIXER
@@ -799,8 +750,9 @@ set(VERSION_H_PATH ${GENERATED_DIRECTORY}/sof_versions.h)
 find_package(Python3 COMPONENTS Interpreter)
 set(PYTHON3 "${Python3_EXECUTABLE}")
 
-# We don't know why we have this https://github.com/thesofproject/sof/issues/5212
+if (NOT CONFIG_COMPILER_INLINE_FUNCTION_OPTION)
 target_compile_options(SOF INTERFACE -fno-inline-functions)
+endif()
 
 # SOF needs `typeof`, `__VA_ARGS__` and maybe other GNU C99
 # extensions. TODO other flags required ?

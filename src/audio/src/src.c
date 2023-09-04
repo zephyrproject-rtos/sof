@@ -576,6 +576,7 @@ static void src_set_sink_params(struct comp_dev *dev, struct sof_sink __sparse_c
 	sink_set_valid_fmt(sink, valid_fmt);
 	sink_set_channels(sink, cd->ipc_config.base.audio_fmt.channels_count);
 	sink_set_buffer_fmt(sink, cd->ipc_config.base.audio_fmt.interleaving_style);
+	sink_set_rate(sink, cd->ipc_config.sink_rate);
 }
 
 #elif CONFIG_IPC_MAJOR_3
@@ -670,9 +671,9 @@ static int src_verify_params(struct processing_module *mod)
 	return ret;
 }
 
-static int src_get_copy_limits(struct comp_data *cd,
-			       struct sof_source __sparse_cache *source,
-			       struct sof_sink __sparse_cache *sink)
+static bool src_get_copy_limits(struct comp_data *cd,
+				struct sof_source __sparse_cache *source,
+				struct sof_sink __sparse_cache *sink)
 {
 	struct src_param *sp;
 	struct src_stage *s1;
@@ -709,9 +710,9 @@ static int src_get_copy_limits(struct comp_data *cd,
 	}
 
 	if (sp->blk_in == 0 && sp->blk_out == 0)
-		return -EIO;
+		return false;
 
-	return 0;
+	return true;
 }
 
 static int src_params_general(struct processing_module *mod,
@@ -920,6 +921,18 @@ static int src_init(struct processing_module *mod)
 	struct comp_data *cd = NULL;
 
 	comp_dbg(dev, "src_init()");
+#if CONFIG_IPC_MAJOR_3
+	if (dev->ipc_config.type != SOF_COMP_SRC) {
+		comp_err(dev, "src_init(): Wrong IPC config type %u",
+			 dev->ipc_config.type);
+		return -EINVAL;
+	}
+#endif
+	if (!cfg->init_data || cfg->size != sizeof(cd->ipc_config)) {
+		comp_err(dev, "src_init(): Missing or bad size (%u) init data",
+			 cfg->size);
+		return -EINVAL;
+	}
 
 	/* validate init data - either SRC sink or source rate must be set */
 	if (src_rate_check(cfg->init_data) < 0) {
@@ -987,26 +1000,31 @@ static int src_prepare(struct processing_module *mod,
 	return src_prepare_general(mod, sources[0], sinks[0]);
 }
 
+
+static bool src_is_ready_to_process(struct processing_module *mod,
+				    struct sof_source __sparse_cache **sources, int num_of_sources,
+				    struct sof_sink __sparse_cache **sinks, int num_of_sinks)
+{
+	struct comp_data *cd = module_get_private_data(mod);
+
+	return src_get_copy_limits(cd, sources[0], sinks[0]);
+}
+
 static int src_process(struct processing_module *mod,
 		       struct sof_source __sparse_cache **sources, int num_of_sources,
 		       struct sof_sink __sparse_cache **sinks, int num_of_sinks)
 {
 	struct comp_data *cd = module_get_private_data(mod);
-	struct comp_dev *dev = mod->dev;
-	int ret;
 
-	comp_dbg(dev, "src_process()");
+	comp_dbg(mod->dev, "src_process()");
 
 	/* src component needs 1 source and 1 sink */
-	ret = src_get_copy_limits(cd, sources[0], sinks[0]);
-	if (ret) {
-		comp_dbg(dev, "No data to process.");
+	if (!src_get_copy_limits(cd, sources[0], sinks[0])) {
+		comp_dbg(mod->dev, "No data to process.");
 		return 0;
 	}
 
-	ret = cd->src_func(cd, sources[0], sinks[0]);
-
-	return ret;
+	return cd->src_func(cd, sources[0], sinks[0]);
 }
 
 static int src_set_config(struct processing_module *mod, uint32_t config_id,
@@ -1052,6 +1070,7 @@ static struct module_interface src_interface = {
 	.init  = src_init,
 	.prepare = src_prepare,
 	.process = src_process,
+	.is_ready_to_process = src_is_ready_to_process,
 	.set_configuration = src_set_config,
 	.get_configuration = src_get_config,
 	.reset = src_reset,

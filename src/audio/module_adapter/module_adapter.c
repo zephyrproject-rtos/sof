@@ -184,6 +184,7 @@ static int module_adapter_sink_src_prepare(struct comp_dev *dev)
 	uint32_t num_of_sources = 0;
 	uint32_t num_of_sinks = 0;
 	int ret;
+	int i = 0;
 
 	/* acquire all sink and source buffers, get handlers to sink/source API */
 	list_for_item(blist, &dev->bsink_list) {
@@ -212,11 +213,11 @@ static int module_adapter_sink_src_prepare(struct comp_dev *dev)
 	ret = module_prepare(mod, audio_src, num_of_sources, audio_sink, num_of_sinks);
 
 	/* release all source buffers in reverse order */
-	for (int i = num_of_sources - 1; i >= 0; i--)
+	for (i = num_of_sources - 1; i >= 0; i--)
 		buffer_release(source_buffers_c[i]);
 
 	/* release all sink buffers in reverse order */
-	for  (int i = num_of_sinks - 1; i >= 0 ; i--)
+	for  (i = num_of_sinks - 1; i >= 0 ; i--)
 		buffer_release(sinks_buffers_c[i]);
 
 	return ret;
@@ -860,7 +861,7 @@ static int module_adapter_audio_stream_copy_1to1(struct comp_dev *dev)
 		buffer_stream_writeback(sink_c, mod->output_buffers[0].size);
 
 	if (mod->output_buffers[0].size)
-		audio_stream_produce(&sink_c->stream, mod->output_buffers[0].size);
+		comp_update_buffer_produce(sink_c, mod->output_buffers[0].size);
 
 	/* release all buffers */
 	buffer_release(sink_c);
@@ -879,7 +880,11 @@ static int module_adapter_audio_stream_type_copy(struct comp_dev *dev)
 
 	/* handle special case of HOST/DAI type components */
 	if (dev->ipc_config.type == SOF_COMP_HOST || dev->ipc_config.type == SOF_COMP_DAI)
+#if CONFIG_IPC_MAJOR_3
 		return module_process_legacy(mod, NULL, 0, NULL, 0);
+#else
+		return module_process_stream(mod, NULL, 0, NULL, 0);
+#endif
 
 	if (mod->stream_copy_single_to_single)
 		return module_adapter_audio_stream_copy_1to1(dev);
@@ -975,7 +980,7 @@ static int module_adapter_audio_stream_type_copy(struct comp_dev *dev)
 		if (!mod->skip_sink_buffer_writeback)
 			buffer_stream_writeback(sink_c, mod->output_buffers[i].size);
 		if (mod->output_buffers[i].size)
-			audio_stream_produce(&sink_c->stream, mod->output_buffers[i].size);
+			comp_update_buffer_produce(sink_c, mod->output_buffers[i].size);
 	}
 
 	mod->total_data_produced += mod->output_buffers[0].size;
@@ -1013,6 +1018,7 @@ static int module_adapter_sink_source_copy(struct comp_dev *dev)
 	uint32_t num_of_sources = 0;
 	uint32_t num_of_sinks = 0;
 	int ret;
+	int i = 0;
 
 	comp_dbg(dev, "module_adapter_sink_source_copy(): start");
 
@@ -1047,13 +1053,13 @@ static int module_adapter_sink_source_copy(struct comp_dev *dev)
 	}
 
 	/* release all source buffers in reverse order */
-	for (int i = num_of_sources - 1; i >= 0; i--) {
+	for (i = num_of_sources - 1; i >= 0; i--) {
 		mod->total_data_consumed += source_get_num_of_processed_bytes(audio_src[i]);
 		buffer_release(source_buffers_c[i]);
 	}
 
 	/* release all sink buffers in reverse order */
-	for  (int i = num_of_sinks - 1; i >= 0 ; i--) {
+	for  (i = num_of_sinks - 1; i >= 0 ; i--) {
 		mod->total_data_produced += sink_get_num_of_processed_bytes(audio_sink[i]);
 		buffer_release(sinks_buffers_c[i]);
 	}
