@@ -24,7 +24,7 @@
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/pm/policy.h>
-#include <version.h>
+#include <zephyr/version.h>
 #include <zephyr/sys/__assert.h>
 #include <zephyr/cache.h>
 
