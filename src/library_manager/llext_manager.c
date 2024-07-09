@@ -273,12 +273,12 @@ static int llext_manager_link(struct sof_man_fw_desc *desc, struct sof_man_modul
 	       ctx->segment[LIB_MANAGER_BSS].addr,
 	       ctx->segment[LIB_MANAGER_BSS].size);
 
-	ssize_t binfo_o = llext_find_section(&ebl.loader, ".mod_buildinfo");
+	k_ssize_t binfo_o = llext_find_section(&ebl.loader, ".mod_buildinfo");
 
 	if (binfo_o)
 		*buildinfo = llext_peek(&ebl.loader, binfo_o);
 
-	ssize_t mod_o = llext_find_section(&ebl.loader, ".module");
+	k_ssize_t mod_o = llext_find_section(&ebl.loader, ".module");
 
 	if (mod_o)
 		*mod_manifest = llext_peek(&ebl.loader, mod_o);
