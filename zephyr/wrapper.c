@@ -330,11 +330,13 @@ int poll_for_register_delay(uint32_t reg, uint32_t mask,
 volatile int *_sof_fatal_null = NULL;
 
 struct arch_esf;
+struct arch_csf;
 
 void k_sys_fatal_error_handler(unsigned int reason,
-			       const struct arch_esf *esf)
+			       const struct arch_esf *esf, const struct arch_csf *csf)
 {
 	ARG_UNUSED(esf);
+	ARG_UNUSED(csf);
 
 	/* flush and switch to immediate mode */
 	LOG_PANIC();
