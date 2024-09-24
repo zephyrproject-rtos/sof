@@ -238,7 +238,7 @@ if (CONFIG_SOC_SERIES_INTEL_ADSP_ACE)
 			${SOF_PLATFORM_PATH}/lunarlake/lib/clk.c
 		)
 
-	zephyr_library_sources_ifdef(CONFIG_SOC_INTEL_ACE30_PTL
+	zephyr_library_sources_ifdef(CONFIG_SOC_INTEL_ACE30
 			${SOF_PLATFORM_PATH}/pantherlake/lib/clk.c
 		)
 
@@ -268,7 +268,7 @@ if (CONFIG_SOC_SERIES_INTEL_ADSP_ACE)
 		set(PLATFORM "meteorlake")
 	elseif(CONFIG_SOC_INTEL_ACE20_LNL)
 		set(PLATFORM "lunarlake")
-	elseif(CONFIG_SOC_INTEL_ACE30_PTL)
+	elseif(CONFIG_SOC_INTEL_ACE30)
 		set(PLATFORM "pantherlake")
 	endif()
 
