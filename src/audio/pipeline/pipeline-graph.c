@@ -282,10 +282,10 @@ int pipeline_complete(struct pipeline *p, struct comp_dev *source,
 		.comp_data = &data,
 	};
 
-#if !UNIT_TEST && !CONFIG_LIBRARY
-	int freq = clock_get_freq(cpu_get_id());
+#if !UNIT_TEST && !CONFIG_LIBRARY && CONFIG_KCPS_DYNAMIC_CLOCK_CONTROL
+	int __maybe_unused freq = clock_get_freq(cpu_get_id());
 #else
-	int freq = 0;
+	int __maybe_unused freq = 0;
 #endif
 	int ret;
 
@@ -321,12 +321,19 @@ static int pipeline_comp_reset(struct comp_dev *current,
 {
 	struct pipeline *p = ctx->comp_data;
 	struct pipeline *p_current = current->pipeline;
-	int is_single_ppl = comp_is_single_pipeline(current, p->source_comp);
 	int is_same_sched = pipeline_is_same_sched_comp(p_current, p);
+	int is_single_ppl;
 	int err;
 
 	pipe_dbg(p_current, "pipeline_comp_reset(), current->comp.id = 0x%x, dir = %u",
 		 dev_comp_id(current), dir);
+
+	if (!p->source_comp) {
+		pipe_err(p, "pipeline_comp_reset(): source_comp is NULL");
+		return -EINVAL;
+	}
+
+	is_single_ppl = comp_is_single_pipeline(current, p->source_comp);
 
 	/*
 	 * Reset should propagate to the connected pipelines, which need to be
@@ -358,6 +365,11 @@ static int pipeline_comp_reset(struct comp_dev *current,
 		return err;
 
 	return pipeline_for_each_comp(current, ctx, dir);
+}
+
+static inline void buffer_reset_params(struct comp_buffer *buffer, void *data)
+{
+	audio_buffer_reset_params(&buffer->audio_buffer);
 }
 
 /* reset the whole pipeline */
@@ -404,17 +416,7 @@ int pipeline_for_each_comp(struct comp_dev *current,
 			continue;
 
 		/* don't go back to the buffer which already walked */
-		/*
-		 * Note, that this access must be performed unlocked via
-		 * uncached address. Trying to lock before checking the flag
-		 * understandably leads to a deadlock when this function is
-		 * called recursively from .comp_func() below. We do it in a
-		 * safe way: this flag must *only* be accessed in this function
-		 * only in these three cases: testing, setting and clearing.
-		 * Note, that it is also assumed that buffers aren't shared
-		 * across CPUs. See further comment below.
-		 */
-		dcache_writeback_invalidate_region(uncache_to_cache(buffer), sizeof(*buffer));
+
 		if (buffer->audio_buffer.walking)
 			continue;
 

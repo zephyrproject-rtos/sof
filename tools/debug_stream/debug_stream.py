@@ -308,6 +308,8 @@ class CircularBufferDecoder:
         if bpos < 0:
             bpos = self.buf_words + pos - bsize
         rec = self.get_hdr(slot, bpos)
+        if rec == None:
+                return
         if bsize != rec.size_words:
             return
         if seqno is not None:
@@ -507,7 +509,7 @@ def cavstool_main_loop(my_args):
         if not cavstool.fw_is_alive(dsp):
             cavstool.wait_fw_entered(dsp, timeout_s=None)
         if my_args.direct_access_slot < 0:
-            offset = cavstool.debug_slot_offset_by_type(ADSP_DW_SLOT_DEBUG_STREAM)
+            offset = cavstool.debug_slot_offset_by_type(ADSP_DW_SLOT_DEBUG_STREAM, timeout_s=0.5)
             if offset is None:
                 logging.error("Could not find debug_stream slot")
                 sys.exit(1)

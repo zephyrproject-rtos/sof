@@ -20,6 +20,7 @@
 #include "testbench/utils.h"
 #include "testbench/file.h"
 #include "testbench/topology_ipc4.h"
+#include "testbench/trace.h"
 
 #if defined __XCC__
 #include <xtensa/tie/xt_timer.h>
@@ -43,6 +44,7 @@ int tb_setup(struct sof *sof, struct testbench_prm *tp)
 	sys_comp_init(sof);
 
 	/* Module adapter components */
+	sys_comp_module_aria_interface_init();
 	sys_comp_module_crossover_interface_init();
 	sys_comp_module_dcblock_interface_init();
 	sys_comp_module_demux_interface_init();
@@ -54,6 +56,8 @@ int tb_setup(struct sof *sof, struct testbench_prm *tp)
 	sys_comp_module_google_rtc_audio_processing_interface_init();
 	sys_comp_module_igo_nr_interface_init();
 	sys_comp_module_mfcc_interface_init();
+	sys_comp_module_mixin_interface_init();
+	sys_comp_module_mixout_interface_init();
 	sys_comp_module_multiband_drc_interface_init();
 	sys_comp_module_mux_interface_init();
 	sys_comp_module_rtnr_interface_init();
@@ -66,6 +70,7 @@ int tb_setup(struct sof *sof, struct testbench_prm *tp)
 	/* other necessary initializations */
 	pipeline_posn_init(sof);
 	init_system_notify(sof);
+	tb_enable_trace(tp->trace_level);
 
 	/* init IPC */
 	if (ipc_init(sof) < 0) {
@@ -120,7 +125,7 @@ int tb_setup(struct sof *sof, struct testbench_prm *tp)
 	tp->config[0].rate = tp->fs_in;
 	tp->config[0].channels = tp->channels_in;
 	tp->config[0].format = tp->frame_fmt;
-	tp->period_size = 2 * krate;
+	tp->period_frames = krate;
 
 	/* TODO: Need to set this later for larger topologies with multiple PCMs. The
 	 * pipelines are determined based on just the PCM ID for the device that we
@@ -251,7 +256,10 @@ static int tb_prepare_widgets_capture(struct testbench_prm *tp, struct tplg_pcm_
 static int tb_set_up_widget(struct testbench_prm *tp, struct tplg_comp_info *comp_info)
 {
 	struct tplg_pipeline_info *pipe_info = comp_info->pipe_info;
+	struct tb_glb_state *glb = &tp->glb_ctx;
+	struct tb_ctl *ctl;
 	int ret;
+	int i;
 
 	pipe_info->usage_count++;
 
@@ -265,7 +273,35 @@ static int tb_set_up_widget(struct testbench_prm *tp, struct tplg_comp_info *com
 	}
 
 	/* now set up the widget */
-	return tb_set_up_widget_ipc(tp, comp_info);
+	ret = tb_set_up_widget_ipc(tp, comp_info);
+	if (ret < 0)
+		return ret;
+
+	/* send kcontrol bytes data */
+	for (i = 0; i < glb->num_ctls; i++) {
+		struct sof_abi_hdr *abi;
+
+		ctl = &glb->ctl[i];
+
+		/* send the bytes data from kcontrols associated with current widget */
+		if (ctl->module_id != comp_info->module_id ||
+		    ctl->instance_id != comp_info->instance_id ||
+		    ctl->type != SND_SOC_TPLG_TYPE_BYTES)
+			continue;
+
+		abi = (struct sof_abi_hdr *)ctl->data;
+
+		/* send IPC with kcontrol data */
+		ret = tb_send_bytes_data(&tp->ipc_tx, &tp->ipc_rx,
+					 comp_info->module_id, comp_info->instance_id, abi);
+		if (ret < 0) {
+			fprintf(stderr, "Error: Failed to set bytes data for widget %s.\n",
+				comp_info->name);
+			return ret;
+		}
+	}
+
+	return 0;
 }
 
 static int tb_set_up_widgets_playback(struct testbench_prm *tp,
@@ -426,7 +462,7 @@ int tb_set_up_all_pipelines(struct testbench_prm *tp)
 		return ret;
 	}
 
-	fprintf(stdout, "pipelines set up complete\n");
+	tb_debug_print("pipelines set up complete\n");
 	return 0;
 }
 
@@ -589,6 +625,7 @@ void tb_free_topology(struct testbench_prm *tp)
 	}
 
 	free(ctx->tplg_base);
+	free(tp->glb_ctx.ctl);
 	tb_debug_print("freed all pipelines, widgets, routes and pcms\n");
 }
 

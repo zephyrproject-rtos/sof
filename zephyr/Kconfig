@@ -18,16 +18,6 @@ config ZEPHYR_NATIVE_DRIVERS
 	  dai-zephyr
 	  will be used instead of legacy xtos version.
 
-config SOF_ZEPHYR_STRICT_HEADERS
-	bool "Experimental: Force build with Zephyr RTOS headers only"
-	default n
-	help
-	  This is a transitional option that allows developers to test builds
-	  only using the Zephyr RTOS headers. This will eventually become the
-	  default header configuration when native Zephyr is ready and this menu
-	  choice will be removed.
-	  If unsure, say n.
-
 config DMA_DOMAIN
 	bool "Enable the usage of DMA domain."
 	default y if IMX8M
@@ -86,4 +76,18 @@ config SOF_BOOT_TEST
 	  initialized. After that SOF will continue running and be usable as
 	  usual.
 
+config SOF_ZEPHYR_NO_SOF_CLOCK
+	bool
+	help
+	  Do not use SOF clk.h interface to set the DSP clock frequency.
+	  Requires implementation of platform/lib/clk.h.
+
+config VIRTUAL_HEAP
+	bool "Use virtual memory heap to allocate a buffers"
+	default y if ACE
+	default n
+	depends on ACE
+	help
+	  Enabling this option will use the virtual memory heap allocator to allocate buffers.
+	  It is based on a set of buffers whose size is predetermined.
 endif

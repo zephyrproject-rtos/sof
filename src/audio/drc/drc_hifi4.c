@@ -15,7 +15,7 @@
 #include "drc_algorithm.h"
 #include "drc_math.h"
 
-#if SOF_USE_HIFI(4, DRC)
+#if SOF_USE_MIN_HIFI(4, DRC)
 
 #include <xtensa/tie/xt_hifi4.h>
 
@@ -143,23 +143,29 @@ void drc_update_detector_average(struct drc_state *state,
 		for (ch = 0; ch < nch; ch++) {
 			abs_input_array_p = abs_input_array;
 			sample16_p = (ae_int16 *)state->pre_delay_buffers[ch] + div_start;
-			for (i = 0; i < DRC_DIVISION_FRAMES; i++) {
-				AE_L16_XP(sample16, sample16_p, nbyte);
-				sample32 = AE_CVT32X2F16_10(sample16);
-				temp = AE_L32_I(abs_input_array_p, 0);
+			for (i = 0; i < DRC_DIVISION_FRAMES / 4; i++) {
+				AE_L16X4_XP(sample16, sample16_p, sizeof(ae_int16x4));
+
+				sample32 = AE_CVT32X2F16_32(sample16);
+				temp = AE_L32X2_I(abs_input_array_p, 0);
 				sample32 = AE_MAXABS32S(sample32, temp);
-				AE_S32_L_XP(sample32, abs_input_array_p, 4);
+				AE_S32X2_IP(sample32, abs_input_array_p, sizeof(ae_int32x2));
+
+				sample32 = AE_CVT32X2F16_10(sample16);
+				temp = AE_L32X2_I(abs_input_array_p, 0);
+				sample32 = AE_MAXABS32S(sample32, temp);
+				AE_S32X2_IP(sample32, abs_input_array_p, sizeof(ae_int32x2));
 			}
 		}
 	} else { /* 4 bytes per sample */
 		for (ch = 0; ch < nch; ch++) {
 			abs_input_array_p = abs_input_array;
 			sample32_p = (ae_int32 *)state->pre_delay_buffers[ch] + div_start;
-			for (i = 0; i < DRC_DIVISION_FRAMES; i++) {
-				AE_L32_XP(sample32, sample32_p, nbyte);
-				temp = AE_L32_I(abs_input_array_p, 0);
+			for (i = 0; i < DRC_DIVISION_FRAMES / 2; i++) {
+				AE_L32X2_IP(sample32, sample32_p, sizeof(ae_int32x2));
+				temp = AE_L32X2_I(abs_input_array_p, 0);
 				sample32 = AE_MAXABS32S(sample32, temp);
-				AE_S32_L_XP(sample32, abs_input_array_p, nbyte);
+				AE_S32X2_IP(sample32, abs_input_array_p, sizeof(ae_int32x2));
 			}
 		}
 	}
@@ -607,7 +613,7 @@ static void drc_s16_default(struct processing_module *mod,
 	const int sample_inc = nch * sizeof(ae_int16);
 	const int delay_inc = sizeof(ae_int16);
 
-	if (!p->enabled) {
+	if (!cd->enabled) {
 		/* Delay the input sample only and don't do other processing. This is used when the
 		 * DRC is disabled. We want to do this to match the processing delay of other bands
 		 * in multi-band DRC kernel case.
@@ -748,7 +754,7 @@ static void drc_s24_default(struct processing_module *mod,
 	const int sample_inc = nch * sizeof(int32_t);
 	const int delay_inc = sizeof(int32_t);
 
-	if (!p->enabled) {
+	if (!cd->enabled) {
 		/* Delay the input sample only and don't do other processing. This is used when the
 		 * DRC is disabled. We want to do this to match the processing delay of other bands
 		 * in multi-band DRC kernel case. Note: use 32 bit delay function.
@@ -835,7 +841,7 @@ static void drc_s32_default(struct processing_module *mod,
 	const int sample_inc = nch * sizeof(int32_t);
 	const int delay_inc = sizeof(int32_t);
 
-	if (!p->enabled) {
+	if (!cd->enabled) {
 		/* Delay the input sample only and don't do other processing. This is used when the
 		 * DRC is disabled. We want to do this to match the processing delay of other bands
 		 * in multi-band DRC kernel case.

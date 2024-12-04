@@ -14,7 +14,7 @@
 
 #include <rtos/symbol.h>
 
-#if SOF_USE_HIFI(3, FILTER) || SOF_USE_HIFI(4, FILTER)
+#if SOF_USE_HIFI(3, FILTER)
 
 /*
  * Direct form I second order filter block (biquad)
@@ -49,7 +49,7 @@
 int32_t iir_df1(struct iir_state_df1 *iir, int32_t x)
 {
 	ae_int64 acc;
-	ae_valign coef_align = AE_ZALIGN64();
+	ae_valign coef_align;
 	ae_int32x2 coef_a2a1;
 	ae_int32x2 coef_b2b1;
 	ae_int32x2 coef_b0;

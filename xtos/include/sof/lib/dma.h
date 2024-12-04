@@ -29,8 +29,7 @@
 #include <stdint.h>
 
 #ifdef __ZEPHYR__
-#include <zephyr/device.h>
-#include <zephyr/drivers/dma.h>
+#error "Please use zephyr/include/sof/lib/dma.h instead"
 #endif
 
 struct comp_buffer;
@@ -106,16 +105,11 @@ enum dma_irq_cmd {
 #define DMA_CHAN_INVALID	0xFFFFFFFF
 #define DMA_CORE_INVALID	0xFFFFFFFF
 
-/* Attributes have been ported to Zephyr. This condition is necessary until full support of
- * CONFIG_SOF_ZEPHYR_STRICT_HEADERS.
- */
-#ifndef CONFIG_ZEPHYR_NATIVE_DRIVERS
 /* DMA attributes */
 #define DMA_ATTR_BUFFER_ALIGNMENT		0
 #define DMA_ATTR_COPY_ALIGNMENT			1
 #define DMA_ATTR_BUFFER_ADDRESS_ALIGNMENT	2
 #define DMA_ATTR_BUFFER_PERIOD_COUNT		3
-#endif
 
 struct dma;
 
@@ -215,9 +209,6 @@ struct dma_plat_data {
 	const char *irq_name;
 	uint32_t chan_size;
 	const void *drv_plat_data;
-#ifdef __ZEPHYR__
-	uint32_t period_count;
-#endif
 };
 
 struct dma {
@@ -227,9 +218,6 @@ struct dma {
 	const struct dma_ops *ops;
 	atomic_t num_channels_busy; /* number of busy channels */
 	struct dma_chan_data *chan; /* channels array */
-#ifdef __ZEPHYR__
-	const struct device *z_dev; /* Zephyr driver */
-#endif
 	void *priv_data;
 };
 

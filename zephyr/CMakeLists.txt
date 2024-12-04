@@ -158,15 +158,7 @@ target_include_directories(SOF INTERFACE ${RIMAGE_TOP}/src/include)
 target_include_directories(SOF INTERFACE ${SOF_SRC_PATH}/include)
 target_include_directories(SOF INTERFACE ${SOF_SRC_PATH}/arch/${ARCH}/include)
 target_include_directories(SOF INTERFACE ${sof_top_dir}/third_party/include)
-
-# TODO: Zephyr should not need xtos headers: FIX.
-if (CONFIG_SOF_ZEPHYR_STRICT_HEADERS)
-	target_include_directories(SOF INTERFACE ${sof_top_dir}/zephyr/include)
-else()
-	# include Zephyr before xtos to flag up any errors in SOF
-	target_include_directories(SOF INTERFACE ${sof_top_dir}/zephyr/include)
-	target_include_directories(SOF INTERFACE ${sof_top_dir}/${PLATFORM_HEADERS}/include)
-endif()
+target_include_directories(SOF INTERFACE ${sof_top_dir}/zephyr/include)
 
 # SOF module init
 zephyr_library_named(modules_sof)
@@ -230,8 +222,6 @@ if (CONFIG_SOC_SERIES_INTEL_CAVS_V25)
 	# Platform sources
 	zephyr_library_sources(
 		${SOF_PLATFORM_PATH}/intel/cavs/platform.c
-		${SOF_PLATFORM_PATH}/tigerlake/lib/clk.c
-		lib/clk.c
 		lib/dma.c
 	)
 
@@ -413,6 +403,58 @@ if (CONFIG_SOC_MIMX9596_M7)
 	set(PLATFORM "imx95")
 endif()
 
+# AMD RMB platforms
+if (CONFIG_SOC_ACP_6_0)
+    zephyr_library_sources(
+		${SOF_DRIVERS_PATH}/amd/common/acp_bt_dai.c
+		${SOF_DRIVERS_PATH}/amd/common/acp_dma.c
+		${SOF_DRIVERS_PATH}/amd/common/acp_dmic_dai.c
+		${SOF_DRIVERS_PATH}/amd/common/acp_dmic_dma.c
+		${SOF_DRIVERS_PATH}/amd/common/acp_sp_dma.c
+		${SOF_DRIVERS_PATH}/amd/common/ipc.c
+		${SOF_DRIVERS_PATH}/amd/rembrandt/acp_bt_dma.c
+		${SOF_DRIVERS_PATH}/amd/rembrandt/acp_dma.c
+		${SOF_DRIVERS_PATH}/amd/rembrandt/acp_dmic_dma.c
+		${SOF_DRIVERS_PATH}/amd/rembrandt/acp_hs_dai.c
+		${SOF_DRIVERS_PATH}/amd/rembrandt/acp_hs_dma.c
+		${SOF_DRIVERS_PATH}/amd/rembrandt/acp_sp_dai.c
+		${SOF_DRIVERS_PATH}/amd/rembrandt/acp_sp_dma.c
+		${SOF_DRIVERS_PATH}/amd/rembrandt/interrupt.c
+		${SOF_DRIVERS_PATH}/amd/rembrandt/ipc.c
+	)
+
+	# Platform sources
+	zephyr_library_sources(
+		${SOF_PLATFORM_PATH}/amd/rembrandt/platform.c
+		${SOF_PLATFORM_PATH}/amd/rembrandt/lib/clk.c
+		${SOF_PLATFORM_PATH}/amd/rembrandt/lib/dai.c
+		${SOF_PLATFORM_PATH}/amd/rembrandt/lib/dma.c
+		${SOF_PLATFORM_PATH}/amd/rembrandt/lib/memory.c
+	)
+
+	# SOF core infrastructure - runs on top of Zephyr
+	zephyr_library_sources(
+		${SOF_SRC_PATH}/drivers/interrupt.c
+	)
+
+	# Zephyr DMA domain should only be used with zephyr_ll
+	if (CONFIG_DMA_DOMAIN)
+		zephyr_library_sources(
+		${SOF_SRC_PATH}/schedule/zephyr_ll.c
+			)
+	else()
+		zephyr_library_sources(
+			${SOF_SRC_PATH}/schedule/ll_schedule.c
+			)
+	endif()
+
+	zephyr_include_directories(${SOF_PLATFORM_PATH}/amd/rembrandt/include)
+	zephyr_include_directories(${SOF_PLATFORM_PATH}/amd/common/include)
+	zephyr_include_directories(${SOF_PLATFORM_PATH}/amd/rembrandt/include/arch)
+
+	set(PLATFORM "acp_6_0")
+endif()
+
 # Building for native_posix-based whole-OS host emulator
 zephyr_library_sources_ifdef(CONFIG_ZEPHYR_POSIX
 	${SOF_SRC_PATH}/schedule/zephyr_ll.c
@@ -446,9 +488,7 @@ zephyr_library_sources(
 	${SOF_MATH_PATH}/exp_fcn_hifi.c
 
 	# SOF library - parts to transition to Zephyr over time
-	${SOF_LIB_PATH}/clk.c
 	${SOF_LIB_PATH}/notifier.c
-	${SOF_LIB_PATH}/cpu-clk-manager.c
 	${SOF_LIB_PATH}/dma.c
 	${SOF_LIB_PATH}/dai.c
 
@@ -484,6 +524,14 @@ zephyr_library_sources(
 
 	# Common library functions - Will be moved to Zephyr over time
 	lib.c
+)
+
+if(NOT CONFIG_SOF_ZEPHYR_NO_SOF_CLOCK)
+	zephyr_library_sources(${SOF_LIB_PATH}/clk.c)
+endif()
+
+zephyr_library_sources_ifdef(CONFIG_KCPS_DYNAMIC_CLOCK_CONTROL
+	${SOF_LIB_PATH}/cpu-clk-manager.c
 )
 
 # Optional math utility
@@ -620,6 +668,8 @@ zephyr_library_sources_ifdef(CONFIG_MATH_FIR
 zephyr_library_sources_ifdef(CONFIG_MATH_IIR_DF1
 	${SOF_MATH_PATH}/iir_df1_generic.c
 	${SOF_MATH_PATH}/iir_df1_hifi3.c
+	${SOF_MATH_PATH}/iir_df1_hifi4.c
+	${SOF_MATH_PATH}/iir_df1_hifi5.c
 	${SOF_MATH_PATH}/iir_df1.c
 )
 
@@ -723,9 +773,11 @@ if(CONFIG_COMP_VOLUME STREQUAL "m")
 	add_dependencies(app volume)
 elseif(CONFIG_COMP_VOLUME)
 	zephyr_library_sources(
+		${SOF_AUDIO_PATH}/volume/volume_hifi5.c
 		${SOF_AUDIO_PATH}/volume/volume_hifi4.c
 		${SOF_AUDIO_PATH}/volume/volume_hifi3.c
 		${SOF_AUDIO_PATH}/volume/volume_generic.c
+		${SOF_AUDIO_PATH}/volume/volume_hifi5_with_peakvol.c
 		${SOF_AUDIO_PATH}/volume/volume_hifi4_with_peakvol.c
 		${SOF_AUDIO_PATH}/volume/volume_hifi3_with_peakvol.c
 		${SOF_AUDIO_PATH}/volume/volume_generic_with_peakvol.c
@@ -1083,9 +1135,13 @@ zephyr_library_sources_ifdef(CONFIG_WAVES_CODEC_STUB
 	${SOF_AUDIO_PATH}/module_adapter/module/waves/maxx_stub.c
 )
 
-zephyr_library_sources_ifdef(CONFIG_PROBE
-	${SOF_SRC_PATH}/probe/probe.c
-)
+if(CONFIG_PROBE STREQUAL "m")
+	add_subdirectory(${SOF_SRC_PATH}/probe/llext
+			 ${PROJECT_BINARY_DIR}/probe_llext)
+	add_dependencies(app probe)
+elseif(CONFIG_PROBE)
+	zephyr_library_sources(${SOF_SRC_PATH}/probe/probe.c)
+endif()
 
 zephyr_library_sources_ifdef(CONFIG_MULTICORE
 	${SOF_SRC_PATH}/idc/idc.c

@@ -37,6 +37,9 @@ struct file_comp_lookup {
 #define TB_NAME_SIZE		256
 #define TB_MAX_CONFIG_COUNT	2
 #define TB_MAX_CONFIG_NAME_SIZE	64
+#define TB_MAX_VOLUME_SIZE	120
+#define TB_MAX_DATA_SIZE	512
+#define TB_MAX_CTLS		16
 
 struct tb_mq_desc {
 	char queue_name[TB_NAME_SIZE];
@@ -51,6 +54,27 @@ struct tb_config {
 	int rate;
 	int channels;
 	unsigned long format;
+};
+
+struct tb_ctl {
+	unsigned int module_id;
+	unsigned int instance_id;
+	unsigned int type;
+	unsigned int volume_table[TB_MAX_VOLUME_SIZE];
+	unsigned int index;
+	char data[TB_MAX_DATA_SIZE];
+	union {
+		struct snd_soc_tplg_mixer_control mixer_ctl;
+		struct snd_soc_tplg_enum_control enum_ctl;
+		struct snd_soc_tplg_bytes_control bytes_ctl;
+	};
+};
+
+struct tb_glb_state {
+	char magic[8];			/* SOF_MAGIC */
+	uint32_t num_ctls;		/* number of ctls */
+	size_t size;			/* size of this structure in bytes */
+	struct tb_ctl *ctl;
 };
 #endif
 
@@ -74,7 +98,7 @@ struct testbench_prm {
 	int pipeline_num;
 	int copy_iterations;
 	bool copy_check;
-	bool quiet;
+	int trace_level;
 	int dynamic_pipeline_iterations;
 	int tick_period_us;
 	int pipeline_duration_ms;
@@ -113,7 +137,8 @@ struct testbench_prm {
 	struct tplg_pcm_info *pcm_info;
 	struct tb_config config[TB_MAX_CONFIG_COUNT];
 	int num_configs;
-	size_t period_size;
+	int period_frames;
+	struct tb_glb_state glb_ctx;
 #endif
 };
 

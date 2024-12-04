@@ -18,6 +18,7 @@
 #include <ipc/control.h>
 #include <ipc/stream.h>
 #include <ipc/topology.h>
+#include <module/module/llext.h>
 #include <rtos/alloc.h>
 #include <rtos/init.h>
 #include <rtos/panic.h>
@@ -138,7 +139,7 @@ static int drc_setup(struct drc_comp_data *cd, uint16_t channels, uint32_t rate)
  * End of DRC setup code. Next the standard component methods.
  */
 
-static int drc_init(struct processing_module *mod)
+__cold static int drc_init(struct processing_module *mod)
 {
 	struct module_data *md = &mod->priv;
 	struct comp_dev *dev = mod->dev;
@@ -195,7 +196,7 @@ cd_fail:
 	return ret;
 }
 
-static int drc_free(struct processing_module *mod)
+__cold static int drc_free(struct processing_module *mod)
 {
 	struct drc_comp_data *cd = module_get_private_data(mod);
 
@@ -278,6 +279,18 @@ static int drc_process(struct processing_module *mod,
 			comp_err(dev, "drc_copy(), failed DRC setup");
 			return ret;
 		}
+
+		/* If new configuration blob is received in pass-through mode, and it
+		 * has params.enabled true, then find the DRC processing function.
+		 */
+		if (cd->drc_func == drc_default_pass && cd->config->params.enabled)
+			cd->drc_func = drc_find_proc_func(cd->source_format);
+
+		/* If new configuration blob has params.enabled false, then it is safe
+		 * to switch to pass-through mode.
+		 */
+		if (!cd->config->params.enabled)
+			cd->drc_func = drc_default_pass;
 	}
 
 	/* Control pass-though in processing function with switch control */
@@ -351,6 +364,15 @@ static int drc_prepare(struct processing_module *mod,
 			comp_err(dev, "drc_prepare(), No proc func");
 			return -EINVAL;
 		}
+
+		/* Params.enabled in the configuration blob is the master switch of DRC.
+		 * The enable switch control does not have impact if this is not set to
+		 * true. When false it is safe to use fast pass-through copy. A
+		 * non-enabled blob can be used when same pipeline is used for both
+		 * headphone and speaker where DRC should be off for headphone mode.
+		 */
+		if (!cd->config->params.enabled)
+			cd->drc_func = drc_default_pass;
 	} else {
 		/* Generic function for all formats */
 		cd->drc_func = drc_default_pass;
@@ -386,7 +408,6 @@ SOF_MODULE_INIT(drc, sys_comp_module_drc_interface_init);
 /* modular: llext dynamic link */
 
 #include <module/module/api_ver.h>
-#include <module/module/llext.h>
 #include <rimage/sof/user/manifest.h>
 
 #define UUID_DRC 0xda, 0xe4, 0x6e, 0xb3, 0x6f, 0x00, 0xf9, 0x47, \

@@ -23,6 +23,7 @@
 #include <rtos/task.h>
 #include <rtos/string_macro.h>
 #if CONFIG_IPC_MAJOR_4
+#include <sof/audio/module_adapter/module/generic.h>
 #include <ipc4/gateway.h>
 #include <ipc4/module.h>
 #include <sof/audio/component.h>
@@ -32,7 +33,6 @@
 SOF_DEFINE_REG_UUID(probe4);
 #define PROBE_UUID probe4_uuid
 
-static const struct comp_driver comp_probe;
 #elif CONFIG_IPC_MAJOR_3
 SOF_DEFINE_REG_UUID(probe);
 #define PROBE_UUID probe_uuid
@@ -759,7 +759,6 @@ static uint32_t probe_gen_format(uint32_t frame_fmt, uint32_t rate,
 	default:
 		tr_err(&pr_tr, "probe_gen_format(): Invalid frame format specified = 0x%08x",
 		       frame_fmt);
-		assert(false);
 		return 0;
 	}
 
@@ -836,7 +835,7 @@ static void kick_probe_task(struct probe_pdata *_probe)
 }
 
 #if CONFIG_LOG_BACKEND_SOF_PROBE
-void probe_logging_hook(uint8_t *buffer, size_t length)
+static void probe_logging_hook(uint8_t *buffer, size_t length)
 {
 	struct probe_pdata *_probe = probe_get();
 	uint64_t checksum;
@@ -1088,7 +1087,7 @@ static struct comp_buffer *ipc4_get_buffer(struct ipc_comp_dev *dev, probe_point
 static bool enable_logs(const struct probe_point *probe)
 {
 #if CONFIG_IPC_MAJOR_4
-	return probe->buffer_id.fields.module_id == 0;
+	return probe->buffer_id.full_id == 0;
 #else
 	return probe->purpose == PROBE_PURPOSE_LOGGING;
 #endif
@@ -1438,91 +1437,198 @@ int probe_point_remove(uint32_t count, const uint32_t *buffer_id)
 }
 
 #if CONFIG_IPC_MAJOR_4
-static struct comp_dev *probe_new(const struct comp_driver *drv,
-				  const struct comp_ipc_config *config, const void *spec)
+static int probe_mod_init(struct processing_module *mod)
 {
-	const struct ipc4_probe_module_cfg *probe_cfg = spec;
-	struct comp_dev *dev;
+	struct comp_dev *dev = mod->dev;
+	struct module_data *mod_data = &mod->priv;
+	const struct ipc4_probe_module_cfg *probe_cfg = mod_data->cfg.init_data;
 	int ret;
 
-	comp_cl_info(&comp_probe, "probe_new()");
-
-	dev = comp_alloc(drv, sizeof(*dev));
-	if (!dev)
-		return NULL;
-
-	dev->ipc_config = *config;
+	comp_info(dev, "probe_mod_init()");
 
 	ret = probe_init(&probe_cfg->gtw_cfg);
-	if (ret < 0) {
-		comp_free(dev);
-		return NULL;
-	}
-	dev->state = COMP_STATE_READY;
+	if (ret < 0)
+		return -EINVAL;
 
-	return dev;
+	return 0;
 }
 
-static void probe_free(struct comp_dev *dev)
+static int probe_free(struct processing_module *mod)
 {
+	struct comp_dev *dev = mod->dev;
+
+	comp_info(dev, "probe_free()");
+
 	probe_deinit();
-	rfree(dev);
+
+	return 0;
 }
 
-static int probe_set_large_config(struct comp_dev *dev, uint32_t param_id,
-				  bool first_block,
-				  bool last_block,
-				  uint32_t data_offset,
-				  const char *data)
+static int probe_set_config(struct processing_module *mod, uint32_t param_id,
+			    enum module_cfg_fragment_position pos, uint32_t data_offset_size,
+			    const uint8_t *fragment, size_t fragment_size, uint8_t *response,
+			    size_t response_size)
 {
-	comp_dbg(dev, "probe_set_large_config()");
+	struct comp_dev *dev = mod->dev;
+
+	comp_info(dev, "probe_set_config()");
 
 	switch (param_id) {
 	case IPC4_PROBE_MODULE_PROBE_POINTS_ADD:
-		return probe_point_add(data_offset / sizeof(struct probe_point),
-				       (const struct probe_point *)data);
+		return probe_point_add(fragment_size / sizeof(struct probe_point),
+				       (const struct probe_point *)fragment);
 	case IPC4_PROBE_MODULE_DISCONNECT_PROBE_POINTS:
-		return probe_point_remove(data_offset / sizeof(uint32_t), (const uint32_t *)data);
+		return probe_point_remove(fragment_size / sizeof(uint32_t),
+					  (const uint32_t *)fragment);
 	case IPC4_PROBE_MODULE_INJECTION_DMA_ADD:
-		return probe_dma_add(data_offset / (2 * sizeof(uint32_t)),
-				     (const struct probe_dma *)data);
+		return probe_dma_add(fragment_size / (2 * sizeof(uint32_t)),
+				     (const struct probe_dma *)fragment);
 	case IPC4_PROBE_MODULE_INJECTION_DMA_DETACH:
-		return probe_dma_remove(data_offset / sizeof(uint32_t), (const uint32_t *)data);
+		return probe_dma_remove(fragment_size / sizeof(uint32_t),
+					(const uint32_t *)fragment);
 	default:
 		return -EINVAL;
 	}
 }
 
-static int probe_get_large_config(struct comp_dev *dev, uint32_t param_id,
-				  bool first_block,
-				  bool last_block,
-				  uint32_t *data_offset,
-				  char *data)
+static int probe_add_point_info_params(struct sof_ipc_probe_info_params *info,
+				       probe_point_id_t id, int index, size_t max_size)
 {
+	struct probe_pdata *_probe = probe_get();
+	struct probe_point pp = {
+		.buffer_id = id,
+		.purpose = PROBE_PURPOSE_EXTRACTION,
+	};
+	int i;
+
+	if (offsetof(struct sof_ipc_probe_info_params, probe_point[index]) +
+	    sizeof(pp) > max_size) {
+		info->num_elems = index;
+		return -ENOENT;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(_probe->probe_points); i++)
+		if (_probe->probe_points[i].stream_tag != PROBE_POINT_INVALID &&
+		    _probe->probe_points[i].buffer_id.full_id == id.full_id)
+			pp.stream_tag = _probe->probe_points[i].stream_tag;
+
+	info->probe_point[index] = pp;
 	return 0;
 }
 
-static const struct comp_driver comp_probe = {
-	.uid	= SOF_RT_UUID(PROBE_UUID),
-	.tctx	= &pr_tr,
-	.ops	= {
-		.create			= probe_new,
-		.free			= probe_free,
-		.set_large_config	= probe_set_large_config,
-		.get_large_config	= probe_get_large_config,
-	},
-};
-
-static SHARED_DATA struct comp_driver_info comp_probe_info = {
-	.drv = &comp_probe,
-};
-
-UT_STATIC void sys_comp_probe_init(void)
+static int probe_get_available_points(struct processing_module *mod,
+				      struct sof_ipc_probe_info_params *info,
+				      size_t max_size)
 {
-	comp_register(platform_shared_get(&comp_probe_info,
-					  sizeof(comp_probe_info)));
+	struct ipc_comp_dev *icd;
+	struct list_item *clist;
+	int i = 0;
+
+	list_for_item(clist, &ipc_get()->comp_list) {
+		struct comp_buffer *buf;
+		probe_point_id_t id;
+
+		icd = container_of(clist, struct ipc_comp_dev, list);
+		if (icd->type != COMP_TYPE_COMPONENT)
+			continue;
+
+		id.fields.module_id = IPC4_MOD_ID(icd->id);
+		id.fields.instance_id = IPC4_INST_ID(icd->id);
+
+		id.fields.type = PROBE_TYPE_INPUT;
+		comp_dev_for_each_producer(icd->cd, buf) {
+			id.fields.index = IPC4_SRC_QUEUE_ID(buf_get_id(buf));
+			if (probe_add_point_info_params(info, id, i, max_size))
+				return 0;
+			i++;
+		}
+		id.fields.type = PROBE_TYPE_OUTPUT;
+		comp_dev_for_each_consumer(icd->cd, buf) {
+			id.fields.index = IPC4_SINK_QUEUE_ID(buf_get_id(buf));
+			if (probe_add_point_info_params(info, id, i, max_size))
+				return 0;
+			i++;
+		}
+	}
+	info->num_elems = i;
+	return 0;
 }
 
-DECLARE_MODULE(sys_comp_probe_init);
-SOF_MODULE_INIT(probe, sys_comp_probe_init);
-#endif
+static int probe_get_config(struct processing_module *mod,
+			    uint32_t config_id, uint32_t *data_offset_size,
+			    uint8_t *fragment, size_t fragment_size)
+{
+	struct sof_ipc_probe_info_params *info =
+		(struct sof_ipc_probe_info_params *)ASSUME_ALIGNED(fragment, 8);
+	struct probe_pdata *_probe = probe_get();
+	struct comp_dev *dev = mod->dev;
+	int i, j;
+
+	comp_dbg(dev, "config_id %u", config_id);
+	switch (config_id) {
+	case IPC4_PROBE_MODULE_PROBE_POINTS_ADD:
+		for (i = 0, j = 0; i < ARRAY_SIZE(_probe->probe_points); i++) {
+			if (_probe->probe_points[i].stream_tag == PROBE_POINT_INVALID)
+				continue;
+			if (offsetof(struct sof_ipc_probe_info_params, probe_point[j]) +
+			    sizeof(info->probe_point[0]) > fragment_size)
+				break;
+			info->probe_point[j++] = _probe->probe_points[i];
+		}
+		info->num_elems = j;
+		comp_info(dev, "%u probe points sent", j);
+		break;
+	case IPC4_PROBE_MODULE_AVAILABLE_PROBE_POINTS:
+		probe_get_available_points(mod, info, fragment_size);
+		comp_info(dev, "%u available probe points sent",
+			  info->num_elems);
+		break;
+	default:
+		comp_err(dev, "unknown config_id %u", config_id);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int probe_dummy_process(struct processing_module *mod,
+			       struct input_stream_buffer *input_buffers, int num_input_buffers,
+			       struct output_stream_buffer *output_buffers, int num_output_buffers)
+{
+	struct comp_dev *dev = mod->dev;
+
+	comp_warn(dev, "probe_dummy_process() called");
+
+	return 0;
+}
+
+static const struct module_interface probe_interface = {
+	.init = probe_mod_init,
+	.process_audio_stream = probe_dummy_process,
+	.set_configuration = probe_set_config,
+	.get_configuration = probe_get_config,
+	.free = probe_free,
+};
+
+DECLARE_MODULE_ADAPTER(probe_interface, PROBE_UUID, pr_tr);
+SOF_MODULE_INIT(probe, sys_comp_module_probe_interface_init);
+
+#if CONFIG_PROBE_MODULE
+/* modular: llext dynamic link */
+
+#include <module/module/api_ver.h>
+#include <module/module/llext.h>
+#include <rimage/sof/user/manifest.h>
+
+#define UUID_PROBE 0x08, 0x08, 0xAD, 0x7C, 0x10, 0xAB, 0x23, 0xCD, 0xEF, 0x45, \
+		0x12, 0xAB, 0x34, 0xCD, 0x56, 0xEF,
+
+SOF_LLEXT_MOD_ENTRY(probe, &probe_interface);
+
+static const struct sof_man_module_manifest mod_manifest __section(".module") __used =
+	SOF_LLEXT_MODULE_MANIFEST("PROBE", probe_llext_entry, 1, UUID_PROBE, 40);
+
+SOF_LLEXT_BUILDINFO;
+
+#endif /* CONFIG_COMP_PROBE_MODULE */
+
+#endif /* CONFIG_IPC_MAJOR_4 */

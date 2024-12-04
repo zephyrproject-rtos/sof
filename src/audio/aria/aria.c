@@ -35,6 +35,18 @@ SOF_DEFINE_REG_UUID(aria);
 
 DECLARE_TR_CTX(aria_comp_tr, SOF_UUID(aria_uuid), LOG_LEVEL_INFO);
 
+/**
+ * \brief Aria gain index mapping table
+ */
+const int32_t sof_aria_index_tab[] = {
+		0,    1,    2,    3,
+		4,    5,    6,    7,
+		8,    9,    0,    1,
+		2,    3,    4,    5,
+		6,    7,    8,    9,
+		0,    1,    2,    3
+};
+
 static size_t get_required_emory(size_t chan_cnt, size_t smpl_group_cnt)
 {
 	/* Current implementation is able to apply 1 ms transition */
@@ -84,7 +96,7 @@ static inline void aria_process_data(struct processing_module *mod,
 	size_t sample_size = audio_stream_get_channels(source) * frames;
 
 	if (cd->att) {
-		aria_algo_calc_gain(cd, INDEX_TAB[cd->gain_state + 1], source, frames);
+		aria_algo_calc_gain(cd, sof_aria_index_tab[cd->gain_state + 1], source, frames);
 		cd->aria_get_data(mod, sink, frames);
 	} else {
 		/* bypass processing gets unprocessed data from buffer */
@@ -99,7 +111,7 @@ static inline void aria_process_data(struct processing_module *mod,
 	cd->data_ptr = cir_buf_wrap(cd->data_ptr + sample_size, cd->data_addr, cd->data_end);
 }
 
-int aria_init(struct processing_module *mod)
+static int aria_init(struct processing_module *mod)
 {
 	struct comp_dev *dev = mod->dev;
 	struct module_data *mod_data = &mod->priv;
@@ -264,16 +276,24 @@ static int aria_set_config(struct processing_module *mod, uint32_t param_id,
 			   size_t response_size)
 {
 	struct aria_data *cd = module_get_private_data(mod);
+	struct comp_dev *dev = mod->dev;
 
+	comp_info(dev, "aria_set_config()");
 	if (param_id == ARIA_SET_ATTENUATION) {
 		if (fragment_size != sizeof(uint32_t)) {
-			comp_err(mod->dev, "Illegal fragment_size = %d", fragment_size);
+			comp_err(dev, "Illegal fragment_size = %d", fragment_size);
 			return -EINVAL;
 		}
 		memcpy_s(&cd->att, sizeof(uint32_t), fragment, sizeof(uint32_t));
+		if (cd->att > ARIA_MAX_ATT) {
+			comp_warn(dev,
+				  "aria_set_config(): Attenuation parameter %d is limited to %d",
+				  cd->att, ARIA_MAX_ATT);
+			cd->att = ARIA_MAX_ATT;
+		}
 		aria_set_gains(cd);
 	} else {
-		comp_err(mod->dev, "Illegal param_id = %d", param_id);
+		comp_err(dev, "Illegal param_id = %d", param_id);
 		return -EINVAL;
 	}
 

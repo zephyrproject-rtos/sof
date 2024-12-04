@@ -19,17 +19,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <cavs/version.h>
+
 struct ll_schedule_domain;
 struct timer;
-
-/*! \def PLATFORM_DEFAULT_CLOCK
- *  \brief clock source for audio pipeline
- *
- *  There are two types of clock: cpu clock which is a internal clock in
- *  xtensa core, and ssp clock which is provided by external HW IP.
- *  The choice depends on HW features on different platform
- */
-#define PLATFORM_DEFAULT_CLOCK CLK_SSP
 
 /* Host page size */
 #define HOST_PAGE_SIZE		4096
@@ -40,9 +33,6 @@ struct timer;
 
 /* local buffer size of DMA tracing */
 #define DMA_TRACE_LOCAL_SIZE	(HOST_PAGE_SIZE * 2)
-
-/* DSP default delay in cycles */
-#define PLATFORM_DEFAULT_DELAY	12
 
 extern intptr_t _module_init_start;
 extern intptr_t _module_init_end;

@@ -282,7 +282,8 @@ struct comp_ops {
 	/**
 	 * Creates a new component device.
 	 * @param drv Parent component driver.
-	 * @param comp Component parameters.
+	 * @param ipc_config Component parameters.
+	 * @param spec Pointer to initialization data
 	 * @return Pointer to the new component device.
 	 *
 	 * All required data objects should be allocated from the run-time
@@ -295,7 +296,7 @@ struct comp_ops {
 	 */
 	struct comp_dev *(*create)(const struct comp_driver *drv,
 				   const struct comp_ipc_config *ipc_config,
-				   const void *ipc_specific_config);
+				   const void *spec);
 
 	/**
 	 * Called to delete the specified component device.
@@ -626,7 +627,7 @@ struct comp_dev {
 	/* private data - core does not touch this */
 	void *priv_data;	/**< private data */
 
-#if CONFIG_PERFORMANCE_COUNTERS
+#if CONFIG_PERFORMANCE_COUNTERS_COMPONENT
 	struct perf_cnt_data pcd;
 #endif
 
@@ -763,6 +764,8 @@ static inline struct comp_dev *comp_alloc(const struct comp_driver *drv,
 	dev->size = bytes;
 	dev->drv = drv;
 	dev->state = COMP_STATE_INIT;
+	list_init(&dev->bsink_list);
+	list_init(&dev->bsource_list);
 	memcpy_s(&dev->tctx, sizeof(struct tr_ctx),
 		 trace_comp_drv_get_tr_ctx(dev->drv), sizeof(struct tr_ctx));
 
@@ -803,6 +806,7 @@ void sys_comp_host_init(void);
 void sys_comp_kpb_init(void);
 void sys_comp_selector_init(void);
 
+void sys_comp_module_aria_interface_init(void);
 void sys_comp_module_copier_interface_init(void);
 void sys_comp_module_crossover_interface_init(void);
 void sys_comp_module_dcblock_interface_init(void);

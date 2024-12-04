@@ -20,6 +20,7 @@
 
 #include "testbench/utils.h"
 #include "testbench/file.h"
+#include "testbench/trace.h"
 
 #include <errno.h>
 #include <math.h>
@@ -27,11 +28,6 @@
 #include <stdlib.h>
 
 #define MAX_TPLG_OBJECT_SIZE	4096
-
-/* bfc7488c-75aa-4ce8-9dbed8da08a698c2 */
-static const struct sof_uuid tb_file_uuid = {
-	0xbfc7488c, 0x75aa, 0x4ce8, {0x9d, 0xbe, 0xd8, 0xda, 0x08, 0xa6, 0x98, 0xc2}
-};
 
 /* load asrc dapm widget */
 static int tb_register_asrc(struct testbench_prm *tp, struct tplg_context *ctx)
@@ -619,9 +615,10 @@ static int tb_load_widget(struct testbench_prm *tb, struct tplg_context *ctx)
 		break;
 	/* unsupported widgets */
 	default:
-		printf("info: Widget %s id %d unsupported and skipped: size %d priv size %d\n",
-		       ctx->widget->name, ctx->widget->id,
-		       ctx->widget->size, ctx->widget->priv.size);
+		if (tb_check_trace(LOG_LEVEL_DEBUG))
+			printf("debug: Widget %s id %d unsupported and skipped: size %d priv size %d\n",
+			       ctx->widget->name, ctx->widget->id,
+			       ctx->widget->size, ctx->widget->priv.size);
 		break;
 	}
 
@@ -692,8 +689,8 @@ int tb_parse_topology(struct testbench_prm *tb)
 		/* read next topology header */
 		hdr = tplg_get_hdr(ctx);
 
-		fprintf(stdout, "type: %x, size: 0x%x count: %d index: %d\n",
-			hdr->type, hdr->payload_size, hdr->count, hdr->index);
+		tplg_debug("type: %x, size: 0x%x count: %d index: %d\n",
+			   hdr->type, hdr->payload_size, hdr->count, hdr->index);
 
 		ctx->hdr = hdr;
 

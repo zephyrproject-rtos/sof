@@ -5,10 +5,14 @@ list(APPEND TPLGS
 # SDW + DMIC topology with passthrough pipelines
 "cavs-sdw\;sof-mtl-rt711-4ch\;PLATFORM=mtl,NUM_DMICS=4,PDM1_MIC_A_ENABLE=1,PDM1_MIC_B_ENABLE=1,\
 DMIC0_ID=2,DMIC1_ID=3,PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt-sof-mtl-rt711-4ch.bin,\
-HDMI1_ID=4,HDMI2_ID=5,HDMI3_ID=6"
+HDMI1_ID=4,HDMI2_ID=5,HDMI3_ID=6,DMIC0_ENHANCED_CAPTURE=true,\
+EFX_DMIC0_TDFB_PARAMS=line4_pass,EFX_DMIC0_DRC_PARAMS=dmic_default"
 
 "cavs-sdw\;sof-mtl-rt711-l0-rt1316-l23-rt714-l1\;PLATFORM=mtl,NUM_SDW_AMP_LINKS=2,SDW_DMIC=1,\
-SDW_SPK_STREAM=SDW2-Playback,SDW_SPK_IN_STREAM=SDW2-Capture,SDW_DMIC_STREAM=SDW1-Capture"
+SDW_SPK_STREAM=SDW2-Playback,SDW_SPK_IN_STREAM=SDW2-Capture,SDW_DMIC_STREAM=SDW1-Capture,\
+EFX_SPK_IIR_PARAMS=highpass_100hz_0db_48khz,EFX_SPK_DRC_PARAMS=speaker_default,\
+EFX_MIC_TDFB_PARAMS=line2_generic_pm10deg,EFX_MIC_DRC_PARAMS=dmic_default.conf,\
+SDW_SPK_ENHANCED_PLAYBACK=true,SDW_DMIC_ENHANCED_CAPTURE=true"
 
 "cavs-sdw\;sof-mtl-rt711-l0-rt1316-l3\;PLATFORM=mtl,NUM_SDW_AMP_LINKS=1,\
 SDW_SPK_STREAM=SDW3-Playback,SDW_SPK_IN_STREAM=SDW3-Capture,\
@@ -18,13 +22,15 @@ HDMI1_ID=4,HDMI2_ID=5,HDMI3_ID=6"
 SDW_SPK_STREAM=SDW3-Playback,SDW_SPK_IN_STREAM=SDW3-Capture,\
 NUM_DMICS=4,PDM1_MIC_A_ENABLE=1,PDM1_MIC_B_ENABLE=1,\
 PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt-sof-mtl-rt711-l0-rt1316-l3-4ch.bin,\
-HDMI1_ID=6,HDMI2_ID=7,HDMI3_ID=8"
+HDMI1_ID=6,HDMI2_ID=7,HDMI3_ID=8,DMIC0_ENHANCED_CAPTURE=true,\
+EFX_DMIC0_TDFB_PARAMS=line4_pass,EFX_DMIC0_DRC_PARAMS=dmic_default"
 
 "cavs-sdw\;sof-mtl-rt711-l0-rt1316-l3-2ch\;PLATFORM=mtl,NUM_SDW_AMP_LINKS=1,\
 SDW_SPK_STREAM=SDW3-Playback,SDW_SPK_IN_STREAM=SDW3-Capture,\
 NUM_DMICS=2,PDM1_MIC_A_ENABLE=0,PDM1_MIC_B_ENABLE=0,\
 PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt-sof-mtl-rt711-l0-rt1316-l3-2ch.bin,\
-HDMI1_ID=6,HDMI2_ID=7,HDMI3_ID=8"
+HDMI1_ID=6,HDMI2_ID=7,HDMI3_ID=8,DMIC0_ENHANCED_CAPTURE=true,\
+EFX_DMIC0_TDFB_PARAMS=line2_generic_pm10deg,EFX_DMIC0_DRC_PARAMS=dmic_default"
 
 "cavs-sdw\;sof-mtl-rt712-l0-rt1712-l3\;PLATFORM=mtl,SDW_DMIC=1,NUM_SDW_AMP_LINKS=1,\
 SDW_AMP_FEEDBACK=false,SDW_SPK_STREAM=Playback-SmartAmp,SDW_DMIC_STREAM=Capture-SmartMic,\
@@ -44,7 +50,8 @@ SDW_AMP_FEEDBACK=false,SDW_SPK_STREAM=Playback-SmartAmp,\
 SDW_JACK_OUT_STREAM=Playback-SimpleJack,SDW_JACK_IN_STREAM=Capture-SimpleJack,\
 NUM_DMICS=4,PDM1_MIC_A_ENABLE=1,PDM1_MIC_B_ENABLE=1,DMIC0_ID=3,DMIC1_ID=4,\
 PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt-sof-mtl-rt712-l0-4ch.bin,\
-HDMI1_ID=5,HDMI2_ID=6,HDMI3_ID=7"
+HDMI1_ID=5,HDMI2_ID=6,HDMI3_ID=7,DMIC0_ENHANCED_CAPTURE=true,\
+EFX_DMIC0_TDFB_PARAMS=line4_pass,EFX_DMIC0_DRC_PARAMS=dmic_default"
 
 # sof_sdw creates dmic01 and dmic16k no matter 1 or 2 dmics are present.
 # So, HDMI link ids are the same for -2ch and -4ch topologies.
@@ -53,7 +60,8 @@ SDW_AMP_FEEDBACK=false,SDW_SPK_STREAM=Playback-SmartAmp,\
 SDW_JACK_OUT_STREAM=Playback-SimpleJack,SDW_JACK_IN_STREAM=Capture-SimpleJack,\
 NUM_DMICS=2,PDM1_MIC_A_ENABLE=0,PDM1_MIC_B_ENABLE=0,DMIC0_ID=3,DMIC1_ID=4,\
 PREPROCESS_PLUGINS=nhlt,NHLT_BIN=nhlt-sof-mtl-rt712-l0-2ch.bin,\
-HDMI1_ID=5,HDMI2_ID=6,HDMI3_ID=7"
+HDMI1_ID=5,HDMI2_ID=6,HDMI3_ID=7,DMIC0_ENHANCED_CAPTURE=true,\
+EFX_DMIC0_TDFB_PARAMS=line2_generic_pm10deg,EFX_DMIC0_DRC_PARAMS=dmic_default"
 
 "cavs-sdw\;sof-mtl-rt1318-l12-rt714-l0\;PLATFORM=mtl,SDW_JACK=false,SDW_DMIC=1,\
 NUM_SDW_AMP_LINKS=2,SDW_SPK_STREAM=SDW1-Playback,SDW_SPK_IN_STREAM=SDW1-Capture,\
@@ -66,7 +74,9 @@ SDW_DMIC_STREAM=SDW0-Capture"
 "cavs-sdw\;sof-mtl-rt713-l0-rt1318-l1-rt1713-l3\;PLATFORM=mtl,NUM_SDW_AMP_LINKS=1,SDW_DMIC=1"
 
 # Jack codec + SmartAmp topology. No SDW_DMIC connection
-"cavs-sdw\;sof-mtl-rt713-l0-rt1316-l12\;PLATFORM=mtl,NUM_SDW_AMP_LINKS=2,HDMI1_ID=4,HDMI2_ID=5,HDMI3_ID=6"
+"cavs-sdw\;sof-mtl-rt713-l0-rt1316-l12\;PLATFORM=mtl,NUM_SDW_AMP_LINKS=2,\
+HDMI1_ID=4,HDMI2_ID=5,HDMI3_ID=6,SDW_SPK_ENHANCED_PLAYBACK=true,\
+EFX_SPK_IIR_PARAMS=highpass_100hz_0db_48khz,EFX_SPK_DRC_PARAMS=speaker_default"
 
 "cavs-sdw\;sof-mtl-rt722-l0\;PLATFORM=mtl,SDW_DMIC=1,NUM_SDW_AMP_LINKS=1,\
 SDW_AMP_FEEDBACK=false,SDW_SPK_STREAM=Playback-SmartAmp,SDW_DMIC_STREAM=Capture-SmartMic,\
@@ -103,6 +113,10 @@ SDW_AMP_FEEDBACK=false,SDW_SPK_STREAM=Playback-SmartAmp,SDW_DMIC_STREAM=Capture-
 SDW_JACK_OUT_STREAM=Playback-SimpleJack,SDW_JACK_IN_STREAM=Capture-SimpleJack"
 
 "cavs-sdw\;sof-arl-cs42l43-l2-cs35l56-l3\;PLATFORM=mtl,NUM_SDW_AMP_LINKS=1,SDW_DMIC=1,\
+SDW_AMP_FEEDBACK=false,SDW_SPK_STREAM=Playback-SmartAmp,SDW_DMIC_STREAM=Capture-SmartMic,\
+SDW_JACK_OUT_STREAM=Playback-SimpleJack,SDW_JACK_IN_STREAM=Capture-SimpleJack"
+
+"cavs-sdw\;sof-arl-rt722-l0_rt1320-l2\;PLATFORM=mtl,NUM_SDW_AMP_LINKS=1,SDW_DMIC=1,\
 SDW_AMP_FEEDBACK=false,SDW_SPK_STREAM=Playback-SmartAmp,SDW_DMIC_STREAM=Capture-SmartMic,\
 SDW_JACK_OUT_STREAM=Playback-SimpleJack,SDW_JACK_IN_STREAM=Capture-SimpleJack"
 
@@ -184,6 +198,12 @@ HDMI_IN_CAPTURE=true"
 "cavs-es83x6\;sof-mtl-hdmi-ssp02\;PLATFORM=mtl,PREPROCESS_PLUGINS=nhlt,\
 NHLT_BIN=nhlt-sof-mtl-hdmi-ssp02.bin,HEADSET_CODEC=false,HDMI_IN_CAPTURE=true,\
 HDMI_IN_1_ID=0,HDMI_IN_2_ID=1"
+
+#ES83x6 codec alone without HDMI-in capture
+"cavs-es83x6\;sof-mtl-es83x6-ssp1\;PLATFORM=mtl,PREPROCESS_PLUGINS=nhlt,\
+NHLT_BIN=nhlt-sof-mtl-es83x6-ssp1.bin,HEADSET_SSP_DAI_INDEX=1,\
+HEADSET_CODEC=true,HEADSET_CODEC_NAME=SSP1-Codec,HDMI1_ID=3,HDMI2_ID=4,HDMI3_ID=5,\
+HDMI_IN_CAPTURE=false"
 
 # SDW + DMIC + HDMI
 "cavs-sdw\;sof-mtl-sdw-cs42l42-l0-max98363-l2\;PLATFORM=mtl,NUM_DMICS=4,PDM1_MIC_A_ENABLE=1,\

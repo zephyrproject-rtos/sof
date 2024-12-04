@@ -10,6 +10,7 @@
 #include <sof/audio/pipeline.h>
 #include <sof/common.h>
 #include <rtos/idc.h>
+#include <rtos/symbol.h>
 #include <sof/ipc/topology.h>
 #include <sof/ipc/common.h>
 #include <sof/ipc/msg.h>
@@ -95,6 +96,7 @@ struct ipc_comp_dev *ipc_get_comp_dev(struct ipc *ipc, uint16_t type, uint32_t i
 
 	return NULL;
 }
+EXPORT_SYMBOL(ipc_get_comp_dev);
 
 /* Walks through the list of components looking for a sink/source endpoint component
  * of the given pipeline
@@ -214,6 +216,15 @@ void ipc_msg_send(struct ipc_msg *msg, void *data, bool high_priority)
 	    msg->tx_data != data) {
 		ret = memcpy_s(msg->tx_data, msg->tx_size, data, msg->tx_size);
 		assert(!ret);
+		if (!cpu_is_primary(cpu_get_id())) {
+			/* Write back data to memory to maintain coherence between cores.
+			 * The response was prepared on a secondary core but will be sent
+			 * to the host from the primary core.
+			 */
+			dcache_writeback_region((__sparse_force void __sparse_cache *)msg->tx_data,
+						msg->tx_size);
+			msg->is_shared = true;
+		}
 	}
 
 	/*

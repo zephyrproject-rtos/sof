@@ -64,7 +64,7 @@ struct aria_data {
 	/* current data position in circular buffer */
 	size_t buff_pos;
 	/* Attenuation parameter */
-	size_t att;
+	uint32_t att;
 	/* Gain states */
 	int32_t gains[ARIA_MAX_GAIN_STATES];
 	/* cyclic buffer pointer data */
@@ -79,8 +79,6 @@ struct aria_data {
 
 	aria_get_data_func aria_get_data;
 };
-
-extern const uint8_t INDEX_TAB[];
 
 struct ipc4_aria_module_cfg {
 	struct ipc4_base_module_cfg base_cfg;

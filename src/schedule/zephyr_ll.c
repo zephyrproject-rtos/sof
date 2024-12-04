@@ -6,6 +6,7 @@
 
 #include <sof/list.h>
 #include <rtos/spinlock.h>
+#include <rtos/symbol.h>
 #include <sof/audio/component.h>
 #include <rtos/interrupt.h>
 #include <sof/lib/notifier.h>
@@ -134,13 +135,13 @@ static inline enum task_state do_task_run(struct task *task)
 {
 	enum task_state state;
 
-#if CONFIG_PERFORMANCE_COUNTERS
+#if CONFIG_PERFORMANCE_COUNTERS_LL_TASKS
 	perf_cnt_init(&task->pcd);
 #endif
 
 	state = task_run(task);
 
-#if CONFIG_PERFORMANCE_COUNTERS
+#if CONFIG_PERFORMANCE_COUNTERS_LL_TASKS
 	perf_cnt_stamp(&task->pcd, perf_trace_null, NULL);
 	task_perf_cnt_avg(&task->pcd, task_perf_avg_info, &ll_tr, task);
 #endif
@@ -522,6 +523,7 @@ int zephyr_ll_task_init(struct task *task,
 
 	return 0;
 }
+EXPORT_SYMBOL(zephyr_ll_task_init);
 
 /* TODO: low-power mode clock support */
 /* Runs on each core during initialisation with the same domain argument */

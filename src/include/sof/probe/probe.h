@@ -8,8 +8,6 @@
 #ifndef __SOF_PROBE_PROBE_H__
 #define __SOF_PROBE_PROBE_H__
 
-#if CONFIG_PROBE
-
 #include <ipc/probe.h>
 
 /**
@@ -18,8 +16,8 @@
 typedef void(*probe_logging_hook_t)(uint8_t *buffer, size_t length);
 
 #if CONFIG_LOG_BACKEND_SOF_PROBE
-void probe_logging_hook(uint8_t *buffer, size_t length);
 const struct log_backend *log_backend_probe_get(void);
+bool probe_is_backend_configured(void);
 #endif
 
 /**
@@ -105,7 +103,5 @@ static inline struct probe_pdata *probe_get(void)
 {
 	return sof_get()->probe;
 }
-
-#endif /* CONFIG_PROBE */
 
 #endif /* __SOF_PROBE_PROBE_H__ */

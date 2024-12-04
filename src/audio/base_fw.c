@@ -17,8 +17,8 @@
 #include <sof/lib/cpu.h>
 #include <sof/platform.h>
 #include <sof/lib_manager.h>
+#include <rtos/clk.h>
 #include <rtos/init.h>
-#include <platform/lib/clk.h>
 #include <sof/audio/module_adapter/module/generic.h>
 #include <sof/schedule/dp_schedule.h>
 #include <sof/schedule/ll_schedule.h>
@@ -57,6 +57,7 @@ static int basefw_config(uint32_t *data_offset, char *data)
 	tuple = tlv_next(tuple);
 	tlv_value_uint32_set(tuple, IPC4_MEMORY_RECLAIMED_FW_CFG, 1);
 
+#ifndef CONFIG_SOF_ZEPHYR_NO_SOF_CLOCK
 	tuple = tlv_next(tuple);
 	tlv_value_uint32_set(tuple, IPC4_FAST_CLOCK_FREQ_HZ_FW_CFG, CLK_MAX_CPU_HZ);
 
@@ -64,6 +65,7 @@ static int basefw_config(uint32_t *data_offset, char *data)
 	tlv_value_uint32_set(tuple,
 			     IPC4_SLOW_CLOCK_FREQ_HZ_FW_CFG,
 			     clock_get_freq(CPU_LOWEST_FREQ_IDX));
+#endif
 
 	tuple = tlv_next(tuple);
 	tlv_value_uint32_set(tuple, IPC4_DL_MAILBOX_BYTES_FW_CFG, MAILBOX_HOSTBOX_SIZE);
@@ -219,17 +221,21 @@ static int basefw_register_kcps(bool first_block,
 	if (!(first_block && last_block))
 		return IPC4_ERROR_INVALID_PARAM;
 
+#if CONFIG_KCPS_DYNAMIC_CLOCK_CONTROL
 	/* value of kcps to request on core 0. Can be negative */
 	if (core_kcps_adjust(0, *(int32_t *)data))
 		return IPC4_ERROR_INVALID_PARAM;
+#endif
 
 	return IPC4_SUCCESS;
 }
 
 static int basefw_kcps_allocation_request(struct ipc4_resource_kcps *request)
 {
+#if CONFIG_KCPS_DYNAMIC_CLOCK_CONTROL
 	if (core_kcps_adjust(request->core_id, request->kcps))
 		return IPC4_ERROR_INVALID_PARAM;
+#endif
 
 	return IPC4_SUCCESS;
 }
@@ -258,6 +264,7 @@ static int basefw_resource_allocation_request(bool first_block,
 
 static int basefw_power_state_info_get(uint32_t *data_offset, char *data)
 {
+#if CONFIG_KCPS_DYNAMIC_CLOCK_CONTROL
 	struct sof_tlv *tuple = (struct sof_tlv *)data;
 	uint32_t core_kcps[CONFIG_CORE_COUNT] = {0};
 	int core_id;
@@ -274,6 +281,9 @@ static int basefw_power_state_info_get(uint32_t *data_offset, char *data)
 	tuple = tlv_next(tuple);
 	*data_offset = (int)((char *)tuple - data);
 	return IPC4_SUCCESS;
+#else
+	return IPC4_UNAVAILABLE;
+#endif
 }
 
 static int basefw_libraries_info_get(uint32_t *data_offset, char *data)
@@ -340,9 +350,6 @@ int schedulers_info_get(uint32_t *data_off_size,
 	if (core_id >= CONFIG_CORE_COUNT)
 		return IPC4_ERROR_INVALID_PARAM;
 
-	if (!cpu_is_me(core_id))
-		return ipc4_process_on_core(core_id, false);
-
 	struct scheduler_props *scheduler_props;
 	/* the internal structs have irregular sizes so we cannot use indexing, and have to
 	 *  reassign pointers for each element
@@ -350,11 +357,16 @@ int schedulers_info_get(uint32_t *data_off_size,
 	struct schedulers_info *schedulers_info = (struct schedulers_info *)data;
 
 	schedulers_info->scheduler_count = 0;
-
 	/* smallest response possible is just zero schedulers count
 	 * here we replace max_len from data_off_size to serve as output size
 	 */
 	*data_off_size = sizeof(struct schedulers_info);
+	/* return empty scheduler_props if core is not active */
+	if (!cpu_is_core_enabled(core_id))
+		return IPC4_SUCCESS;
+
+	if (!cpu_is_me(core_id))
+		return ipc4_process_on_core(core_id, false);
 
 	/* ===================== LL_TIMER SCHEDULER INFO ============================ */
 	schedulers_info->scheduler_count++;
