@@ -121,7 +121,7 @@ int copier_ipcgtw_process(const struct ipc4_ipcgtw_cmd *cmd,
 	switch (cmd->primary.r.cmd) {
 	case IPC4_IPCGWCMD_GET_DATA:
 		if (buf) {
-			data_size = MIN(cmd->extension.r.data_size, SOF_IPC_MSG_MAX_SIZE - 4);
+			data_size = GENERIC_MIN(cmd->extension.r.data_size, SOF_IPC_MSG_MAX_SIZE - 4);
 			data_size = MIN(data_size, audio_stream_get_avail_bytes(&buf->stream));
 			buffer_stream_invalidate(buf, data_size);
 			audio_stream_copy_bytes_to_linear(&buf->stream, out->payload, data_size);
@@ -136,8 +136,8 @@ int copier_ipcgtw_process(const struct ipc4_ipcgtw_cmd *cmd,
 
 	case IPC4_IPCGWCMD_SET_DATA:
 		if (buf) {
-			data_size = MIN(cmd->extension.r.data_size,
-					audio_stream_get_free_bytes(&buf->stream));
+			data_size = GENERIC_MIN(cmd->extension.r.data_size,
+						audio_stream_get_free_bytes(&buf->stream));
 			dcache_invalidate_region((__sparse_force void __sparse_cache *)
 						 MAILBOX_HOSTBOX_BASE,
 						 data_size +
